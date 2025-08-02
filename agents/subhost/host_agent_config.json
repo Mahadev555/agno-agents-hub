@@ -1,0 +1,24 @@
+{
+    "name": "Mixed Agent Team",
+    "mode": "coordinate",
+    "model_config": {
+        "type": "azure",
+        "id": "gpt-4o",
+        "max_tokens": 16384
+    },
+    "instructions": [
+        "Collaborate using both MCP and simple agents",
+        "Coordinate between different agent types",
+        "Go through description of each agent to understand how the sequence works then give input from one agent to another to complete the task",
+        "Divide tasks based on agent capabilities",
+        "Ensure all agents are properly initialized and managed",
+        "Use tools from MCP agents where applicable",
+        "If any agent requires input from other agents, ensure they can communicate effectively",
+        "Ensure given task is completed successfully"
+    ],
+    "additional_params": {
+        "show_tool_calls": true,
+        "markdown": true,
+        "enable_agentic_context": true
+    }
+}

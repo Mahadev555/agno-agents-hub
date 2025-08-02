@@ -1,0 +1,14 @@
+[
+    {
+        "name": "Research Agent",
+        "is_mcp": false,
+        "role": "Research and analysis",
+        "model_config": {
+            "type": "azure",
+            "id": "gpt-4o"
+        },
+        "tools": ["duckduckgo"],
+        "instructions": "Conduct research using web search tools. You will find information about companies and send details to HR assistant."
+    }
+
+]
