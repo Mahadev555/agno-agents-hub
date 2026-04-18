@@ -1,0 +1,28 @@
+{
+  "name": "Mixed Agent Team",
+  "description": "Coordinates multiple agents for complex tasks",
+  "mode": "coordinate",
+  "config": {
+    "name": "Mixed Agent Team",
+    "description": "Coordinates multiple agents for complex tasks",
+    "mode": "coordinate",
+    "model_config": {
+      "type": "azure",
+      "id": "gpt-4o",
+      "max_tokens": 16384
+    },
+    "instructions": [
+      "Coordinate between different agent types",
+      "Divide complex tasks into subtasks",
+      "Route information between agents",
+      "Ensure all agents contribute their expertise",
+      "Synthesize final response from agent outputs",
+      "Manage communication between simple and MCP agents"
+    ],
+    "additional_params": {
+      "show_tool_calls": true,
+      "markdown": true,
+      "enable_agentic_context": true
+    }
+  }
+}

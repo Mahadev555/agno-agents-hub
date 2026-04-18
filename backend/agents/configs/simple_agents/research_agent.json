@@ -1,0 +1,24 @@
+{
+  "name": "Research Agent",
+  "description": "Conducts web research and summarizes findings",
+  "is_mcp": false,
+  "config": {
+    "name": "Research Agent",
+    "description": "Conducts web research and summarizes findings",
+    "role": "Research Specialist",
+    "model_config": {
+      "type": "azure",
+      "id": "gpt-4o",
+      "max_tokens": 4096
+    },
+    "instructions": [
+      "Conduct thorough web searches",
+      "Summarize findings concisely",
+      "Provide relevant sources"
+    ],
+    "tools": ["duckduckgo"],
+    "markdown": true,
+    "show_tool_calls": true,
+    "additional_params": {}
+  }
+}

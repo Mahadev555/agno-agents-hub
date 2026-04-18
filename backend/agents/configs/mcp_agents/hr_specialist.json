@@ -1,0 +1,31 @@
+{
+  "name": "HR Specialist",
+  "description": "Handles HR operations and candidate sourcing via MCP",
+  "is_mcp": true,
+  "mcp_config": {
+    "url": "http://localhost:3001/sse",
+    "transport": "sse",
+    "timeout_seconds": 300,
+    "additional_params": {}
+  },
+  "config": {
+    "name": "HR Specialist",
+    "description": "Handles HR operations and candidate sourcing via MCP",
+    "role": "HR Specialist",
+    "model_config": {
+      "type": "azure",
+      "id": "gpt-4o",
+      "max_tokens": 8192
+    },
+    "instructions": [
+      "Use MCP tools for HR operations",
+      "Source qualified candidates",
+      "Manage recruitment pipeline",
+      "Provide HR consultancy"
+    ],
+    "tools": [],
+    "markdown": true,
+    "show_tool_calls": true,
+    "additional_params": {}
+  }
+}

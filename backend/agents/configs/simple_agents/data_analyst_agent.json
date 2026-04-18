@@ -1,0 +1,25 @@
+{
+  "name": "Data Analysis Agent",
+  "description": "Analyzes data and generates insights",
+  "is_mcp": false,
+  "config": {
+    "name": "Data Analysis Agent",
+    "description": "Analyzes data and generates insights",
+    "role": "Data Analyst",
+    "model_config": {
+      "type": "azure",
+      "id": "gpt-4o",
+      "max_tokens": 4096
+    },
+    "instructions": [
+      "Analyze data patterns",
+      "Generate statistical summaries",
+      "Identify trends and anomalies",
+      "Provide recommendations"
+    ],
+    "tools": [],
+    "markdown": true,
+    "show_tool_calls": true,
+    "additional_params": {}
+  }
+}

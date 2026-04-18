@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from routes.routes import router
+from connection import init_db
 import os
 from contextlib import asynccontextmanager
 
@@ -12,9 +13,20 @@ client_build_dir = os.path.join("backend", "static")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: anything that needs to happen before the app starts
-    print("Starting up agno_hub Hub API...")
+    print("=" * 60)
+    print("Starting agno_hub Hub API...")
+    print("=" * 60)
+    print("Initializing database...")
+    try:
+        init_db()
+        print("[OK] API ready for requests")
+    except Exception as e:
+        print(f"[WARNING] Database initialization warning: {e}")
+        print("The API will run, but database operations may fail")
+    print("=" * 60)
     yield
     # Shutdown: anything that needs to happen before the app stops
+    print("=" * 60)
     print("Shutting down agno_hub Hub API...")
 
 app = FastAPI(

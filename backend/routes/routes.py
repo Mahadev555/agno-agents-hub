@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from typing import List, Dict, Any, Optional, Union
 from pydantic import BaseModel
 from controllers.agents_controller import (
-    AgentsController
+    AgentsController,
+    HostAgentsController,
+    AgentCreateRequest,
+    AgentUpdateRequest,
+    HostAgentCreateRequest,
 )
 from controllers.agent_execution_controller import AgentExecutionController
 
@@ -18,61 +22,82 @@ class AgentExecution(BaseModel):
 router = APIRouter()
 
 
-# ======================= AGENT ROUTES =======================
+# ======================= AGENT CRUD ROUTES =======================
 
+# Get endpoints
 @router.get("/api/agents")
-async def get_agents_for_client():
-    """Get all available agents for the client"""
-    try:
-        # Try to get agents from the database first
-        db_agents = await AgentsController.get_all_agents()
-        
-        # If we have agents in the database, format them for the client
-        if db_agents:
-            formatted_agents = []
-            for agent in db_agents:
-                formatted_agent = {
-                    "id": str(agent.id),
-                    "name": agent.name,
-                    "description": agent.description or "",
-                    "parameters": []
-                }
-                formatted_agents.append(formatted_agent)
-            return formatted_agents
-        
-        # Fallback to sample agents if no agents in the database
-        raise HTTPException(status_code=404, detail="No agents found in database")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch agents: {str(e)}")
+async def get_agents():
+    """Get all agents"""
+    return await AgentsController.get_all_agents()
+
+@router.get("/api/agents/active")
+async def get_active_agents():
+    """Get all active agents"""
+    return await AgentsController.get_active_agents()
+
+@router.get("/api/agents/type/{agent_type}")
+async def get_agents_by_type(agent_type: str):
+    """Get agents by type (simple, mcp, host)"""
+    return await AgentsController.get_agents_by_type(agent_type)
+
+@router.get("/api/agents/mcp")
+async def get_mcp_agents():
+    """Get all MCP agents"""
+    return await AgentsController.get_agents_by_type("mcp")
+
+@router.get("/api/agents/name/{name}")
+async def get_agent_by_name(name: str):
+    """Get agent by name"""
+    return await AgentsController.get_agent_by_name(name)
 
 @router.get("/api/agents/{agent_id}")
 async def get_agent_by_id(agent_id: int):
     """Get a specific agent by ID"""
-    try:
-        agent = await AgentsController.get_agent_by_id(agent_id)
-        
-        # Format the agent for the client
-        formatted_agent = {
-            "id": str(agent.id),
-            "name": agent.name,
-            "description": agent.description or "",
-            "is_mcp": agent.is_mcp,
-            "config": agent.config,
-            "parameters": []
-        }
-        return formatted_agent
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to fetch agent: {str(e)}")
+    return await AgentsController.get_agent_by_id(agent_id)
+
+# Create endpoint
+@router.post("/api/agents")
+async def create_agent(agent_data: AgentCreateRequest):
+    """Create a new agent"""
+    return await AgentsController.create_agent(agent_data)
+
+# Update endpoint
+@router.put("/api/agents/{agent_id}")
+async def update_agent(agent_id: int, agent_data: AgentUpdateRequest):
+    """Update an existing agent"""
+    return await AgentsController.update_agent(agent_id, agent_data)
+
+# Delete endpoint
+@router.delete("/api/agents/{agent_id}")
+async def delete_agent(agent_id: int):
+    """Delete an agent"""
+    return await AgentsController.delete_agent(agent_id)
+
+
+# ======================= HOST AGENT ROUTES =======================
+
+@router.get("/api/host-agents")
+async def get_host_agents():
+    """Get all host agents"""
+    return await HostAgentsController.get_all_host_agents()
+
+@router.get("/api/host-agents/{agent_id}")
+async def get_host_agent_by_id(agent_id: int):
+    """Get a specific host agent by ID"""
+    return await HostAgentsController.get_host_agent_by_id(agent_id)
+
+@router.post("/api/host-agents")
+async def create_host_agent(agent_data: HostAgentCreateRequest):
+    """Create a new host agent"""
+    return await HostAgentsController.create_host_agent(agent_data)
+
+
+# ======================= AGENT EXECUTION ROUTES =======================
 
 @router.post("/api/chat")
 async def process_chat(request: Request):
-    """Process a chat message"""
+    """Process a chat message using agents"""
     try:
-        # Get prompt and agentIds from request body
         body = await request.json()
         prompt = body.get("prompt")
         agent_ids = body.get("agentIds")
@@ -80,28 +105,25 @@ async def process_chat(request: Request):
         if not prompt:
             raise HTTPException(status_code=400, detail="Prompt is required")
         
-        # Use the agent execution controller to process the message
         if agent_ids:
-            # Execute with specific agent(s)
             result = await AgentExecutionController.execute_agent_task(
                 prompt=prompt,
                 agent_ids=agent_ids
             )
             return {
-                "response": result.get("content", "I processed your request but didn't get a clear answer."),
+                "response": result.get("content", "No response generated"),
                 "agent": agent_ids,
                 "status": result.get("status", "completed")
             }
         else:
-            # No specific agent, use default
-            result = await AgentExecutionController.execute_agent_task(
-                prompt=prompt
-            )
+            result = await AgentExecutionController.execute_agent_task(prompt=prompt)
             return {
-                "response": result.get("content", "I processed your request but didn't get a clear answer."),
+                "response": result.get("content", "No response generated"),
                 "agent": None,
                 "status": result.get("status", "completed")
             }
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing chat message: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing chat: {str(e)}")
 
