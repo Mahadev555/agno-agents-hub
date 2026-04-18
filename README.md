@@ -1,160 +1,212 @@
-# Agno Hub
+# Agno Agents Hub
 
-This project implements a multi-agent system.
+A comprehensive AI agent orchestration platform built with FastAPI, React, and the **Agno Framework**. Create, manage, and coordinate multiple AI agents for complex tasks.
+
+## About Agno Framework
+
+[Agno](https://github.com/phidatahq/agno) is a powerful framework for building agent-based systems. It provides:
+
+### Core Capabilities
+- **Dynamic Agent Creation** - Build agents programmatically from configurations
+- **Team Orchestration** - Coordinate multiple agents to work together
+- **Tool Integration** - Connect agents to external tools and APIs
+- **MCP Support** - Model Context Protocol for advanced capabilities
+- **LLM Integration** - Works with Azure OpenAI, OpenAI, and other providers
+- **Flexible Execution** - Run agents in sequential, parallel, or coordinated modes
+- **Memory Management** - Persistent conversation history and state management
+- **Error Handling** - Built-in retry logic and fallback mechanisms
+
+### Why Agno?
+- **Production-Ready** - Battle-tested framework used in enterprise systems
+- **Composable** - Build complex multi-agent systems from simple components
+- **Type-Safe** - Full Python type hints for better IDE support
+- **Extensible** - Easy to add custom agents, tools, and integrations
+- **Multi-LLM Support** - Switch between different LLM providers seamlessly
+- **Fast & Efficient** - Optimized for low-latency agent interactions
+
+This project uses Agno to create a flexible hub where agents can be dynamically instantiated, managed, and coordinated efficiently.
+
+## Project Overview
+
+Agno Hub is a multi-agent system that allows you to:
+- **Define Agents** - Create agent configurations in JSON
+- **Store Agents** - Save agent definitions in PostgreSQL database
+- **Manage Agents** - Full CRUD APIs for agent lifecycle management
+- **Execute Agents** - Run agents individually or in coordinated teams
+- **Interact** - Chat interface to communicate with agents
 
 ## Project Structure
 
-- `agents/` - Contains all agent-related code and configurations
-  - `hosts/` - Supervisor agents for different functionalities
-  - `subhost/` - Individual agent implementations and configurations
-- `controllers/` - API controllers for the application
-- `client/` - React frontend application
-- `mcp_servers/` - Model Context Protocol servers
-- `models/` - Data models and schemas
-- `routes/` - API route definitions
-
-## Setup Instructions
-
-Follow these steps to set up and run the project:
-
-### 1. Frontend Setup
-
-First, build the frontend React application:
-
-```bash
-cd client
-npm install
-npm run build
+```
+Agno-Hub/
+├── backend/                         # FastAPI application
+│   ├── models/                      # SQLAlchemy ORM models
+│   │   ├── agent.py                 # Agent & HostAgent models
+│   │   └── agents_model.py          # Config retrieval functions
+│   ├── services/                    # Business logic
+│   │   ├── database_service.py      # Database operations
+│   │   └── agent_service.py         # Agent CRUD logic
+│   ├── controllers/                 # API request handlers
+│   │   ├── agents_controller.py     # Agent endpoints
+│   │   └── agent_execution_controller.py  # Execution logic
+│   ├── routes/
+│   │   └── routes.py                # API endpoint definitions
+│   ├── agents/
+│   │   ├── configs/                 # JSON agent configurations
+│   │   │   ├── simple_agents/       # SimpleAgent configs
+│   │   │   ├── mcp_agents/          # MCPAgent configs
+│   │   │   └── host_config.json     # HostAgent (orchestrator) config
+│   │   ├── hosts/
+│   │   │   └── host_agent.py        # Dynamic team creation (uses Agno)
+│   │   └── subhost/
+│   │       └── agent.py             # Agent execution orchestration
+│   ├── connection.py                # SQLAlchemy setup
+│   ├── app.py                       # FastAPI application
+│   ├── run_server.py                # Server startup
+│   ├── seed_database.py             # Database seeder
+│   ├── requirements.txt             # Python dependencies
+│   ├── README.md                    # Backend documentation
+│   └── ARCHITECTURE.md              # Detailed architecture
+│
+├── frontend/                        # React TypeScript application
+│   ├── src/
+│   │   ├── components/              # React components
+│   │   ├── services/                # API client
+│   │   ├── theme/                   # UI theming
+│   │   └── App.tsx                  # Root component
+│   ├── public/                      # Static assets
+│   ├── package.json                 # Node dependencies
+│   ├── tsconfig.json                # TypeScript config
+│   └── README.md                    # Frontend documentation
+│
+└── README.md                        # This file
 ```
 
-This will create a production build that will be served by the FastAPI backend.
+## Technology Stack
 
-### 2. Backend Setup
+### Backend
+- **FastAPI** (0.115.13) - Modern web framework
+- **SQLAlchemy** (2.0.41) - ORM for database
+- **PostgreSQL** - Database (via Neon Cloud)
+- **Pydantic v2** - Data validation
+- **Agno** (1.5.10) - Agent orchestration framework
+- **Azure OpenAI** - LLM backend
+- **Python** 3.12+
 
-Go back to the root directory and create a Python virtual environment:
+### Frontend
+- **React** 18+ - UI library
+- **TypeScript** - Type safety
+- **CSS** - Styling
+- **Axios** - HTTP client
+- **Node.js** 16+
 
-```bash
-cd ..
-python -m venv venv
-```
+### Database
+- **PostgreSQL** - Relational database
+- **Neon Cloud** - Managed PostgreSQL hosting
 
-Activate the virtual environment:
+## Getting Started
 
-**Windows:**
-```bash
-venv\Scripts\activate
-```
+### Quick Start
 
-**Linux/Mac:**
-```bash
-source venv/bin/activate
-```
+1. **Clone Repository**
+   ```bash
+   cd Agno-Hub
+   ```
 
-Install required Python packages:
+2. **Backend Setup**
+   ```bash
+   cd backend
+   python -m venv .venv
+   # On Windows:
+   .\.venv\Scripts\activate
+   # On Linux/Mac:
+   source .venv/bin/activate
+   
+   pip install -r requirements.txt
+   ```
 
-```bash
-pip install -r requirements.txt
-```
+3. **Configure Environment**
+   Create `backend/.env`:
+   ```env
+   DATABASE_URL="postgresql://user:password@host:port/database"
+   AZURE_OPENAI_API_KEY='your_key'
+   AZURE_OPENAI_ENDPOINT='your_endpoint'
+   AZURE_OPENAI_DEPLOYMENT='deployment_name'
+   AZURE_OPENAI_API_VERSION='2025-01-01-preview'
+   ```
 
-### 3. Database Setup
+4. **Initialize Database**
+   ```bash
+   python seed_database.py
+   ```
 
-Start a PostgreSQL container with Docker:
+5. **Start Backend**
+   ```bash
+   python run_server.py
+   ```
+   Backend: http://localhost:5000
 
-```bash
-docker run --name agno_hub-postgres -e POSTGRES_USER=agno_hub -e POSTGRES_PASSWORD=agno_hub -e POSTGRES_DB=agno_hub -p 6001:5432 -d postgres
-```
+6. **Frontend Setup** (in new terminal)
+   ```bash
+   cd frontend
+   npm install
+   npm start
+   ```
+   Frontend: http://localhost:3000
 
-Create the required database tables by running the following SQL script:
+## Key Features
 
-```sql
--- public.agents definition
-CREATE TABLE public.agents (
-    agent_id serial4 NOT NULL,
-    "name" text NOT NULL,
-    description text NULL,
-    is_mcp bool DEFAULT false NULL,
-    config jsonb NOT NULL,
-    CONSTRAINT agents_pkey PRIMARY KEY (agent_id)
-);
+✓ **Dynamic Agents** - Create agents from JSON configurations  
+✓ **SQLAlchemy ORM** - Type-safe database operations  
+✓ **CRUD APIs** - Full agent lifecycle management  
+✓ **Agno Framework** - Powerful agent orchestration  
+✓ **Multiple Agent Types** - Simple, MCP, and Host agents  
+✓ **Chat Interface** - Interact with agents  
+✓ **REST APIs** - Comprehensive API documentation  
+✓ **TypeScript Frontend** - Type-safe React application  
+✓ **Database Seeding** - Easy sample data population  
 
--- public.host_agent definition
-CREATE TABLE public.host_agent (
-    agent_id serial4 NOT NULL,
-    "name" text NOT NULL,
-    description text NULL,
-    is_mcp bool DEFAULT false NULL,
-    config jsonb NOT NULL,
-    CONSTRAINT host_agent_pkey PRIMARY KEY (agent_id)
-);
-```
+## Agent Types
 
-You can run this script using a PostgreSQL client such as psql or pgAdmin, or save it as a file (e.g., `setup.sql`) and run:
+### SimpleAgent
+Basic agent with:
+- LLM model configuration
+- System instructions
+- Tool access
+- No MCP required
 
-### 4. Environment Configuration
+### MCPAgent
+Advanced agent with:
+- Model Context Protocol support
+- MCP server integration
+- Extended capabilities
+- MCP configuration
 
-Create a `.env` file in the root directory with the following content:
+### HostAgent
+Orchestrator that:
+- Coordinates multiple agents
+- Creates dynamic teams
+- Runs in coordinate/sequential/parallel modes
+- Uses Agno Team framework
 
-```
-DATABASE_URL="postgresql://agno_hub:agno_hub@localhost:6001/agno_hub"
+## API Documentation
 
-AZURE_OPENAI_API_KEY='your_azure_openai_api_key'
-AZURE_OPENAI_ENDPOINT='your_azure_openai_endpoint'
-AZURE_OPENAI_DEPLOYMENT='chat4'
-AZURE_OPENAI_API_VERSION='2025-01-01-preview'
+**Full API Docs:** http://localhost:5000/docs (Swagger UI)  
+**Alternative:** http://localhost:5000/redoc (ReDoc)
 
-```
+## Detailed Documentation
 
-Make sure to replace the placeholder values with your actual API keys and credentials.
+- [Backend README](./backend/README.md) - Backend API & architecture
+- [Frontend README](./frontend/README.md) - Frontend setup & components
 
-### 5. Running the Application
+## Resources
 
-After completing all the setup steps, start the application:
+- [Agno GitHub](https://github.com/phidatahq/agno)
+- [FastAPI Docs](https://fastapi.tiangolo.com)
+- [React Docs](https://react.dev)
+- [SQLAlchemy Docs](https://docs.sqlalchemy.org)
+- [PostgreSQL Docs](https://www.postgresql.org/docs)
 
-```bash
-python -m uvicorn app:app --host localhost --port 5000 --reload
-```
+---
 
-The application will be available at:
-- Web UI: http://localhost:5000
-- API: http://localhost:5000/api
-
-## Features
-
-- Browse and manage AI agents
-- Interact with agents through a chat interface
-- Detailed agent information and configuration
-- Real-time chat responses
-
-## Troubleshooting
-
-### Database Connection Issues
-
-If you encounter database connection issues, verify:
-- The PostgreSQL container is running: `docker ps`
-- The connection string in `.env` matches your container setup
-- The database and tables have been created correctly
-
-### API Key Issues
-
-If AI agents aren't responding correctly, check:
-- Your Azure OpenAI API keys are correctly set in the `.env` file
-- The service endpoints are accessible from your environment
-
-1. Start the MCP Server:
-```powershell
-cd mcp_servers/engagement_mcp_server
-python -m mcp_fastapi
-```
-
-2. Run the Agent (from project root):
-```powershell
-python -m agents.subhost.agent
-```
-
-## Adding New Agents
-
-### Team Agents
-To add new agents to the team, append agent configurations to `agents/subhost/subhost_config.json`.
-
-### Host Agents
-To add new host agents, update the configuration in `agents/subhost/host_agent_config.json`.
+Made with 🧠 ❤️ by **Mahade Mnaerikar**
