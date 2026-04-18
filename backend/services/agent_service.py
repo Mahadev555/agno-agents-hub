@@ -192,63 +192,6 @@ class AgentService:
         finally:
             if session:
                 session.close()
-    
-    # ============= AGENT QUERIES =============
-    
-    @staticmethod
-    def get_agent_config_for_execution(agent_id: int) -> Optional[Dict[str, Any]]:
-        """
-        Get agent configuration formatted for dynamic execution.
-        This is used by the agent orchestration system.
-        
-        Args:
-            agent_id: ID of the agent
-            
-        Returns:
-            Agent configuration dict ready for execution, or None if not found
-        """
-        agent_data = AgentService.get_agent_by_id(agent_id)
-        if not agent_data:
-            return None
-        return agent_data.get("config")
-    
-    @staticmethod
-    def get_agents_by_type(agent_type: str) -> List[Dict[str, Any]]:
-        """
-        Get all agents of a specific type.
-        
-        Args:
-            agent_type: Type to filter by (simple, mcp, host)
-            
-        Returns:
-            List of agent configs
-        """
-        from services.database_service import DatabaseService
-        return DatabaseService.get_agents_by_type(agent_type)
-    
-    @staticmethod
-    def get_active_agents() -> List[Dict[str, Any]]:
-        """Get all active agents"""
-        from services.database_service import DatabaseService
-        return DatabaseService.get_active_agents()
-    
-    @staticmethod
-    def get_agent_by_id(agent_id: int) -> Optional[Dict[str, Any]]:
-        """Get agent by ID"""
-        from services.database_service import DatabaseService
-        return DatabaseService.get_agent_by_id(agent_id)
-    
-    @staticmethod
-    def get_agent_by_name(name: str) -> Optional[Dict[str, Any]]:
-        """Get agent by name"""
-        from services.database_service import DatabaseService
-        return DatabaseService.get_agent_by_name(name)
-    
-    @staticmethod
-    def get_all_agents() -> List[Dict[str, Any]]:
-        """Get all agents"""
-        from services.database_service import DatabaseService
-        return DatabaseService.get_all_agents()
 
 
 class HostAgentService:
@@ -305,15 +248,4 @@ class HostAgentService:
         finally:
             if session:
                 session.close()
-    
-    @staticmethod
-    def get_host_agent_by_name(name: str) -> Optional[Dict[str, Any]]:
-        """Get host agent by name"""
-        from services.database_service import DatabaseService
-        return DatabaseService.get_host_agent_by_name(name)
-    
-    @staticmethod
-    def get_all_host_agents() -> List[Dict[str, Any]]:
-        """Get all host agents"""
-        from services.database_service import DatabaseService
-        return DatabaseService.get_all_host_agents()
+
