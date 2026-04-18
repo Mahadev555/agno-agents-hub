@@ -4,7 +4,7 @@ A comprehensive AI agent orchestration platform built with FastAPI, React, and t
 
 ## About Agno Framework
 
-[Agno](https://github.com/phidatahq/agno) is a powerful framework for building agent-based systems. It provides:
+[Agno](https://github.com/agno-agi/agno) is a powerful framework for building agent-based systems. It provides:
 
 ### Core Capabilities
 - **Dynamic Agent Creation** - Build agents programmatically from configurations
@@ -201,7 +201,7 @@ Orchestrator that:
 
 ## Resources
 
-- [Agno GitHub](https://github.com/phidatahq/agno)
+- [Agno GitHub](https://github.com/agno-agi/agno)
 - [FastAPI Docs](https://fastapi.tiangolo.com)
 - [React Docs](https://react.dev)
 - [SQLAlchemy Docs](https://docs.sqlalchemy.org)
@@ -209,4 +209,4 @@ Orchestrator that:
 
 ---
 
-Made with 🧠 ❤️ by **Mahade Mnaerikar**
+Made with 🧠 ❤️ by **Mahadev Manerikar**
