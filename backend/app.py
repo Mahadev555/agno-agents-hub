@@ -7,7 +7,7 @@ import os
 from contextlib import asynccontextmanager
 
 # Create client build directory path
-client_build_dir = os.path.join("client", "build")
+client_build_dir = os.path.join("backend", "static")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
