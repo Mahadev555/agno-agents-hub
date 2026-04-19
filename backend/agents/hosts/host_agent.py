@@ -50,7 +50,7 @@ async def create_dynamic_team_with_mcp(
         mode=team_config.get("mode", "coordinate"),  
         model=_get_model_from_config(team_config.get("model_config", {})),  
         members=agents,  
-        instructions=team_config.get("instructions", []),  
+        instructions=team_config.get("instructions", ""),  
         **team_config.get("additional_params", {})  
     )  
       
@@ -112,7 +112,7 @@ def _create_simple_agent(agent_config: Dict[str, Any]) -> Agent:
         role=agent_final_config.get("role", "Assistant"),  
         model=_get_model_from_config(model_config),  
         tools=_get_tools_from_config(agent_final_config.get("tools", [])),  
-        instructions=agent_final_config.get("instructions", []),  
+        instructions=agent_final_config.get("instructions", ""),  
         **agent_final_config.get("additional_params", {})  
     )  
     return agent

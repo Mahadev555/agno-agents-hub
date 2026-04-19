@@ -24,11 +24,7 @@ research_agent = Agent(
     model=Gemini(id="gemini-2.5-flash-lite"),  
     role="Research companies and gather detailed information",  
     tools=[DuckDuckGoTools()],  
-    instructions=[  
-        "Research the requested company thoroughly",  
-        "Gather comprehensive information about the company",  
-        "Focus on key business details, financials, and recent developments"  
-    ],  
+    instructions="Research the requested company thoroughly. Gather comprehensive information about the company. Focus on key business details, financials, and recent developments.",  
 )  
   
 # Agent 2: JSON Creator Agent    
@@ -36,11 +32,7 @@ json_creator = Agent(
     name="JSON Creator",  
     model=Gemini(id="gemini-2.5-flash-lite"),  
     role="Structure research data into JSON format",  
-    instructions=[  
-        "Take the research findings from the research agent",  
-        "Structure all information into the required JSON format",  
-        "Ensure data is properly organized and formatted"  
-    ],  
+    instructions="Take the research findings from the research agent. Structure all information into the required JSON format. Ensure data is properly organized and formatted.",  
 )  
   
 # Team with both separate agents  
@@ -49,11 +41,7 @@ company_team = Team(
     mode="coordinate",  
     model=Gemini(id="gemini-2.5-flash-lite"),  
     members=[research_agent, json_creator],  
-    instructions=[  
-        "First, have the research agent gather company information",  
-        "Then, have the JSON creator structure the findings into JSON format",  
-        "Ensure all research data is properly formatted"  
-    ],  
+    instructions="First, have the research agent gather company information. Then, have the JSON creator structure the findings into JSON format. Ensure all research data is properly formatted.",  
     show_tool_calls=True,  
     markdown=True,  
     show_members_responses=True,  

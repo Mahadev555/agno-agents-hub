@@ -33,12 +33,12 @@ class AgentResponse(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
-
 class AgentCreateRequest(BaseModel):
     """Request model for creating an agent"""
     name: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = None
     agent_type: str = Field(default="simple")
+    instructions: Optional[str] = None
     is_mcp: Optional[bool] = False
     mcp_config: Optional[Dict[str, Any]] = None
     config: Dict[str, Any]
@@ -144,13 +144,56 @@ class AgentsController:
     async def create_agent(agent_data: AgentCreateRequest) -> AgentResponse:
         """Create a new agent"""
         try:
+            # Ensure config has required fields
+            config = agent_data.config or {}
+            
+            # Add instructions to config if provided
+            if agent_data.instructions:
+                config['instructions'] = agent_data.instructions
+            
+            # Ensure config has name
+            if 'name' not in config:
+                config['name'] = agent_data.name
+            
+            # Ensure config has description
+            if 'description' not in config and agent_data.description:
+                config['description'] = agent_data.description
+            
+            # Ensure model_config exists with required fields (id, type, max_tokens)
+            if 'model_config' not in config:
+                config['model_config'] = {
+                    'id': 'gemini-2.5-flash-lite',
+                    'type': 'google',
+                    'max_tokens': 4096,
+                }
+            
+            # Ensure tools array exists
+            if 'tools' not in config:
+                config['tools'] = []
+            
+            # Ensure role exists
+            if 'role' not in config:
+                config['role'] = 'Assistant'
+            
+            # Ensure markdown flag exists
+            if 'markdown' not in config:
+                config['markdown'] = True
+            
+            # Ensure show_tool_calls flag exists
+            if 'show_tool_calls' not in config:
+                config['show_tool_calls'] = True
+            
+            # Ensure additional_params exists
+            if 'additional_params' not in config:
+                config['additional_params'] = {}
+            
             created_agent = AgentService.create_agent(
                 name=agent_data.name,
                 description=agent_data.description,
                 agent_type=agent_data.agent_type,
                 is_mcp=agent_data.is_mcp,
                 mcp_config=agent_data.mcp_config,
-                config=agent_data.config
+                config=config
             )
             return AgentResponse(**created_agent)
         except ValueError as e:

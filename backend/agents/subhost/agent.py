@@ -66,7 +66,7 @@ class AgentWorkflow(Workflow):
                     team_config = {
                         "name": f"Dynamic Team - Agents {agent_ids}",
                         "mode": "coordinate" if execution_mode == "team" else "standalone",
-                        "instructions": ["Execute the task with the selected agents"] if execution_mode == "team" else [],
+                        "instructions": "Execute the task with the selected agents" if execution_mode == "team" else "",
                         "additional_params": {}
                     }
                     if execution_mode == "single":
