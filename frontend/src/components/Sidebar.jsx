@@ -12,6 +12,14 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
     name: '',
     description: '',
     agent_type: 'simple',
+    role: '',
+    instructions: '',
+    modelId: 'gemini-2.5-flash-lite',
+    modelType: 'google',
+    maxTokens: 4096,
+    markdown: true,
+    showToolCalls: true,
+    tools: [],
     config: {},
   })
   const [isCreating, setIsCreating] = useState(false)
@@ -32,10 +40,48 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
     setIsCreating(true)
     setCreateError('')
     try {
-      await agentService.createAgent(createFormData)
-      setCreateFormData({ name: '', description: '', agent_type: 'simple', config: {} })
+      // Build proper config with all required fields
+      const agentConfig = {
+        name: createFormData.name,
+        role: createFormData.role || 'Assistant',
+        description: createFormData.description || '',
+        instructions: createFormData.instructions || '',
+        tools: createFormData.tools || [],
+        markdown: createFormData.markdown,
+        show_tool_calls: createFormData.showToolCalls,
+        model_config: {
+          id: createFormData.modelId,
+          type: createFormData.modelType,
+          max_tokens: parseInt(createFormData.maxTokens) || 4096,
+        },
+        additional_params: {},
+      }
+
+      const payload = {
+        name: createFormData.name,
+        description: createFormData.description,
+        agent_type: createFormData.agent_type,
+        instructions: createFormData.instructions,
+        config: agentConfig,
+        is_mcp: createFormData.agent_type === 'mcp',
+      }
+
+      await agentService.createAgent(payload)
+      setCreateFormData({
+        name: '',
+        description: '',
+        agent_type: 'simple',
+        role: '',
+        instructions: '',
+        modelId: 'gemini-2.5-flash-lite',
+        modelType: 'google',
+        maxTokens: 4096,
+        markdown: true,
+        showToolCalls: true,
+        tools: [],
+        config: {},
+      })
       setShowCreateModal(false)
-      // Optionally refetch agents or show success message
     } catch (err) {
       setCreateError(err.message || 'Failed to create agent')
     } finally {
@@ -133,12 +179,12 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.9, opacity: 0 }}
                 onClick={(e) => e.stopPropagation()}
-                className="card max-w-md w-full p-6"
+                className="card max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto"
               >
-                <h2 className="text-2xl font-bold mb-4">Create New Agent</h2>
+                <h2 className="text-2xl font-bold mb-6">Create New Agent</h2>
 
-                <form onSubmit={handleCreateAgent} className="space-y-4">
-                  <div>
+                <form onSubmit={handleCreateAgent} className="grid grid-cols-2 gap-4">
+                  <div className="col-span-2">
                     <label className="block text-sm font-medium text-slate-700 mb-2">
                       Agent Name *
                     </label>
@@ -152,7 +198,7 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                     />
                   </div>
 
-                  <div>
+                  <div className="col-span-2">
                     <label className="block text-sm font-medium text-slate-700 mb-2">
                       Description
                     </label>
@@ -161,7 +207,7 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                       onChange={(e) => setCreateFormData({ ...createFormData, description: e.target.value })}
                       className="input-primary"
                       placeholder="Enter agent description"
-                      rows="3"
+                      rows="2"
                     />
                   </div>
 
@@ -180,13 +226,103 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                     </select>
                   </div>
 
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Role
+                    </label>
+                    <input
+                      type="text"
+                      value={createFormData.role}
+                      onChange={(e) => setCreateFormData({ ...createFormData, role: e.target.value })}
+                      className="input-primary"
+                      placeholder="e.g., Data Analyst"
+                    />
+                  </div>
+
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      System Instructions
+                    </label>
+                    <textarea
+                      value={createFormData.instructions}
+                      onChange={(e) => setCreateFormData({ ...createFormData, instructions: e.target.value })}
+                      className="input-primary"
+                      placeholder="Enter system instructions for the agent"
+                      rows="3"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Model ID
+                    </label>
+                    <input
+                      type="text"
+                      value={createFormData.modelId}
+                      onChange={(e) => setCreateFormData({ ...createFormData, modelId: e.target.value })}
+                      className="input-primary"
+                      placeholder="gemini-2.5-flash-lite"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Model Type
+                    </label>
+                    <select
+                      value={createFormData.modelType}
+                      onChange={(e) => setCreateFormData({ ...createFormData, modelType: e.target.value })}
+                      className="input-primary"
+                    >
+                      <option value="google">Google</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="anthropic">Anthropic</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                      Max Tokens
+                    </label>
+                    <input
+                      type="number"
+                      value={createFormData.maxTokens}
+                      onChange={(e) => setCreateFormData({ ...createFormData, maxTokens: e.target.value })}
+                      className="input-primary"
+                      placeholder="4096"
+                      min="100"
+                      max="32000"
+                    />
+                  </div>
+
+                  <div className="col-span-2 flex gap-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={createFormData.markdown}
+                        onChange={(e) => setCreateFormData({ ...createFormData, markdown: e.target.checked })}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm font-medium text-slate-700">Markdown</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={createFormData.showToolCalls}
+                        onChange={(e) => setCreateFormData({ ...createFormData, showToolCalls: e.target.checked })}
+                        className="w-4 h-4"
+                      />
+                      <span className="text-sm font-medium text-slate-700">Show Tool Calls</span>
+                    </label>
+                  </div>
+
                   {createError && (
-                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                    <div className="col-span-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
                       {createError}
                     </div>
                   )}
 
-                  <div className="flex gap-2 pt-4">
+                  <div className="col-span-2 flex gap-2 pt-4">
                     <Button
                       variant="secondary"
                       fullWidth
@@ -266,12 +402,21 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.9, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="card max-w-md w-full p-6"
+              className="card max-w-xl w-full flex flex-col max-h-[90vh]"
             >
-              <h2 className="text-2xl font-bold mb-4">Create New Agent</h2>
+              <div className="flex justify-between items-center mb-6 p-6 pb-0">
+                <h2 className="text-2xl font-bold">Create New Agent</h2>
+                <button
+                  onClick={() => setShowCreateModal(false)}
+                  className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                  type="button"
+                >
+                  <X className="w-6 h-6 text-slate-600" />
+                </button>
+              </div>
 
-              <form onSubmit={handleCreateAgent} className="space-y-4">
-                <div>
+              <form onSubmit={handleCreateAgent} className="grid grid-cols-1 sm:grid-cols-2 gap-4 overflow-y-auto px-6 pb-6 flex-1">
+                <div className="col-span-full">
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     Agent Name *
                   </label>
@@ -285,7 +430,7 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                   />
                 </div>
 
-                <div>
+                <div className="col-span-full">
                   <label className="block text-sm font-medium text-slate-700 mb-2">
                     Description
                   </label>
@@ -294,7 +439,7 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                     onChange={(e) => setCreateFormData({ ...createFormData, description: e.target.value })}
                     className="input-primary"
                     placeholder="Enter agent description"
-                    rows="3"
+                    rows="2"
                   />
                 </div>
 
@@ -313,13 +458,103 @@ const Sidebar = ({ activeTab, setActiveTab, tabs, isOpen, onClose }) => {
                   </select>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Role
+                  </label>
+                  <input
+                    type="text"
+                    value={createFormData.role}
+                    onChange={(e) => setCreateFormData({ ...createFormData, role: e.target.value })}
+                    className="input-primary"
+                    placeholder="e.g., Data Analyst"
+                  />
+                </div>
+
+                <div className="col-span-full">
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    System Instructions
+                  </label>
+                  <textarea
+                    value={createFormData.instructions}
+                    onChange={(e) => setCreateFormData({ ...createFormData, instructions: e.target.value })}
+                    className="input-primary"
+                    placeholder="Enter system instructions for the agent"
+                    rows="3"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Model ID
+                  </label>
+                  <input
+                    type="text"
+                    value={createFormData.modelId}
+                    onChange={(e) => setCreateFormData({ ...createFormData, modelId: e.target.value })}
+                    className="input-primary"
+                    placeholder="gemini-2.5-flash-lite"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Model Type
+                  </label>
+                  <select
+                    value={createFormData.modelType}
+                    onChange={(e) => setCreateFormData({ ...createFormData, modelType: e.target.value })}
+                    className="input-primary"
+                  >
+                    <option value="google">Google</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-2">
+                    Max Tokens
+                  </label>
+                  <input
+                    type="number"
+                    value={createFormData.maxTokens}
+                    onChange={(e) => setCreateFormData({ ...createFormData, maxTokens: e.target.value })}
+                    className="input-primary"
+                    placeholder="4096"
+                    min="100"
+                    max="32000"
+                  />
+                </div>
+
+                <div className="col-span-full flex gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={createFormData.markdown}
+                      onChange={(e) => setCreateFormData({ ...createFormData, markdown: e.target.checked })}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm font-medium text-slate-700">Markdown</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={createFormData.showToolCalls}
+                      onChange={(e) => setCreateFormData({ ...createFormData, showToolCalls: e.target.checked })}
+                      className="w-4 h-4"
+                    />
+                    <span className="text-sm font-medium text-slate-700">Show Tool Calls</span>
+                  </label>
+                </div>
+
                 {createError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                  <div className="col-span-full p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
                     {createError}
                   </div>
                 )}
 
-                <div className="flex gap-2 pt-4">
+                <div className="col-span-full flex gap-2 pt-4">
                   <Button
                     variant="secondary"
                     fullWidth
