@@ -7,6 +7,7 @@ import Button from './Button'
 
 const ChatPlayground = () => {
   const [agents, setAgents] = useState([])
+  const [hostAgents, setHostAgents] = useState([])
   const [executionMode, setExecutionMode] = useState('single')
   const [selectedAgent, setSelectedAgent] = useState('')
   const [selectedHostAgent, setSelectedHostAgent] = useState('')
@@ -20,6 +21,7 @@ const ChatPlayground = () => {
   useEffect(() => {
     const initializeChat = async () => {
       await fetchAgents()
+      await fetchHostAgents()
     }
     initializeChat()
     setMessages([{
@@ -40,12 +42,25 @@ const ChatPlayground = () => {
       const agentList = Array.isArray(data) ? data : []
       setAgents(agentList)
       if (agentList.length > 0) {
-        setSelectedAgent(agentList[0].agent_id)
-        setSelectedHostAgent(agentList[0].agent_id)
+        setSelectedAgent(agentList[0].agent_id || agentList[0].id)
       }
     } catch (err) {
       console.error('Failed to fetch agents:', err)
       setError('Failed to load agents')
+    }
+  }
+
+  const fetchHostAgents = async () => {
+    try {
+      const data = await agentService.getHostAgents()
+      const hostAgentList = Array.isArray(data) ? data : []
+      setHostAgents(hostAgentList)
+      if (hostAgentList.length > 0) {
+        setSelectedHostAgent(hostAgentList[0].agent_id || hostAgentList[0].id)
+      }
+    } catch (err) {
+      console.error('Failed to fetch host agents:', err)
+      setError('Failed to load host agents')
     }
   }
 
@@ -157,7 +172,7 @@ const ChatPlayground = () => {
               className="input-primary"
             >
               {agents.map(agent => (
-                <option key={agent.agent_id} value={agent.agent_id}>
+                <option key={agent.agent_id || agent.id} value={agent.agent_id || agent.id}>
                   {agent.name}{agent.role ? ` (${agent.role})` : ''}
                 </option>
               ))}
@@ -172,8 +187,8 @@ const ChatPlayground = () => {
                 onChange={(e) => setSelectedHostAgent(e.target.value)}
                 className="input-primary"
               >
-                {agents.map(agent => (
-                  <option key={agent.agent_id} value={agent.agent_id}>
+                {hostAgents.map(agent => (
+                  <option key={agent.agent_id || agent.id} value={agent.agent_id || agent.id}>
                     {agent.name}{agent.role ? ` (${agent.role})` : ''}
                   </option>
                 ))}
@@ -182,13 +197,13 @@ const ChatPlayground = () => {
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Team Members</label>
               <div className="flex flex-wrap gap-2">
-                {agents.filter(a => a.agent_id !== selectedHostAgent).map(agent => (
+                {agents.map(agent => (
                   <motion.button
-                    key={agent.agent_id}
+                    key={agent.agent_id || agent.id}
                     whileHover={{ scale: 1.05 }}
-                    onClick={() => toggleMember(agent.agent_id)}
+                    onClick={() => toggleMember(agent.agent_id || agent.id)}
                     className={`px-3 py-2 rounded-lg font-medium transition-all ${
-                      selectedMembers.includes(agent.agent_id)
+                      selectedMembers.includes(agent.agent_id || agent.id)
                         ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white'
                         : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                     }`}

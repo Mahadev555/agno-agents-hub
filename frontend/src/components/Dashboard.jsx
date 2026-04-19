@@ -5,19 +5,24 @@ import Button from './Button'
 
 const Dashboard = () => {
   const [agents, setAgents] = useState([])
+  const [hostAgents, setHostAgents] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
 
   useEffect(() => {
-    fetchAgents()
+    fetchAllAgents()
   }, [])
 
-  const fetchAgents = async () => {
+  const fetchAllAgents = async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await agentService.getAgents()
-      setAgents(Array.isArray(data) ? data : [])
+      const [agentsData, hostAgentsData] = await Promise.all([
+        agentService.getAgents(),
+        agentService.getHostAgents()
+      ])
+      setAgents(Array.isArray(agentsData) ? agentsData : [])
+      setHostAgents(Array.isArray(hostAgentsData) ? hostAgentsData : [])
     } catch (err) {
       console.error('Failed to fetch agents:', err)
       setError('Failed to load agents')
@@ -26,11 +31,13 @@ const Dashboard = () => {
     }
   }
 
+  const allAgents = [...agents, ...hostAgents]
+
   const stats = [
-    { label: 'Total Agents', value: agents.length, icon: '🤖', color: 'from-primary-500 to-primary-600' },
-    { label: 'Active', value: agents.filter(a => a.status === 'active').length, icon: '✅', color: 'from-emerald-500 to-emerald-600' },
-    { label: 'Executions', value: '955', icon: '⚡', color: 'from-amber-500 to-amber-600' },
-    { label: 'Avg Response', value: '2.3s', icon: '⏱️', color: 'from-secondary-500 to-secondary-600' },
+    { label: 'Total Agents', value: allAgents.length, icon: '🤖', color: 'from-primary-500 to-primary-600' },
+    { label: 'Simple Agents', value: agents.length, icon: '⚙️', color: 'from-blue-500 to-blue-600' },
+    { label: 'Host Agents', value: hostAgents.length, icon: '👨‍💼', color: 'from-purple-500 to-purple-600' },
+    { label: 'Active', value: allAgents.filter(a => a.is_active !== false).length, icon: '✅', color: 'from-emerald-500 to-emerald-600' },
   ]
 
   const containerVariants = {
@@ -92,59 +99,93 @@ const Dashboard = () => {
           <div className="p-6 bg-red-50 border border-red-200 rounded-lg text-red-700">
             {error}
           </div>
-        ) : agents.length === 0 ? (
+        ) : allAgents.length === 0 ? (
           <div className="p-6 bg-blue-50 border border-blue-200 rounded-lg text-blue-700">
             No agents available
           </div>
         ) : (
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
-            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-          >
-            {agents.map((agent, idx) => (
-              <motion.div key={agent.agent_id} variants={itemVariants}>
-                <div className="card p-6 card-hover">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="text-4xl">
-                      {agent.emoji || '🤖'}
-                    </div>
-                    <span className="px-3 py-1 bg-emerald-100 text-emerald-700 text-xs font-semibold rounded-full">
-                      {agent.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </div>
-                  
-                  <h3 className="font-bold text-lg mb-1">{agent.name}</h3>
-                  <p className="text-slate-600 text-sm mb-4 line-clamp-2">{agent.description || 'No description'}</p>
-                  
-                  {agent.role && (
-                    <p className="text-xs text-slate-500 mb-3">Role: {agent.role}</p>
-                  )}
+          <>
+            {/* Simple Agents Section */}
+            {agents.length > 0 && (
+              <div className="mb-8">
+                <h3 className="text-lg font-semibold mb-4 text-slate-700">Simple Agents</h3>
+                <motion.div
+                  variants={containerVariants}
+                  initial="hidden"
+                  animate="visible"
+                  className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                >
+                  {agents.map((agent, idx) => (
+                    <motion.div key={agent.agent_id || agent.id} variants={itemVariants}>
+                      <div className="card p-6 card-hover">
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="text-4xl">
+                            {agent.emoji || '⚙️'}
+                          </div>
+                          <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
+                            agent.is_active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                          }`}>
+                            {agent.is_active !== false ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                        
+                        <h3 className="font-bold text-lg mb-1">{agent.name}</h3>
+                        <p className="text-slate-600 text-sm mb-4 line-clamp-2">{agent.description || 'No description'}</p>
+                        
+                        {agent.role && (
+                          <p className="text-xs text-slate-500 mb-3">Role: {agent.role}</p>
+                        )}
 
-                  {agent.tools && agent.tools.length > 0 && (
-                    <div className="flex flex-wrap gap-1 mb-4">
-                      {agent.tools.slice(0, 3).map((tool, i) => (
-                        <span key={i} className="px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded">
-                          {tool}
-                        </span>
-                      ))}
-                      {agent.tools.length > 3 && (
-                        <span className="px-2 py-1 bg-slate-100 text-slate-700 text-xs rounded">
-                          +{agent.tools.length - 3}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                        <div className="flex gap-2 mt-4">
+                          <Button variant="primary" size="sm" fullWidth>Execute</Button>
+                          <Button variant="outline" size="sm" fullWidth>Details</Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              </div>
+            )}
 
-                  <div className="flex gap-2 mt-4">
-                    <Button variant="primary" size="sm" fullWidth>Execute</Button>
-                    <Button variant="outline" size="sm" fullWidth>Details</Button>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </motion.div>
+            {/* Host Agents Section */}
+            {hostAgents.length > 0 && (
+              <div>
+                <h3 className="text-lg font-semibold mb-4 text-slate-700">Host/Coordinator Agents</h3>
+                <motion.div
+                  variants={containerVariants}
+                  initial="hidden"
+                  animate="visible"
+                  className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                >
+                  {hostAgents.map((agent, idx) => (
+                    <motion.div key={agent.agent_id || agent.id} variants={itemVariants}>
+                      <div className="card p-6 card-hover border-l-4 border-purple-500">
+                        <div className="flex justify-between items-start mb-4">
+                          <div className="text-4xl">
+                            {agent.emoji || '👨‍💼'}
+                          </div>
+                          <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
+                            agent.is_active !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'
+                          }`}>
+                            {agent.is_active !== false ? 'Active' : 'Inactive'}
+                          </span>
+                        </div>
+                        
+                        <h3 className="font-bold text-lg mb-1">{agent.name}</h3>
+                        <p className="text-slate-600 text-sm mb-3">Mode: <span className="font-semibold text-purple-600">{agent.mode || 'coordinate'}</span></p>
+                        <p className="text-slate-600 text-sm mb-4 line-clamp-2">{agent.description || 'No description'}</p>
+
+                        <div className="flex gap-2 mt-4">
+                          <Button variant="primary" size="sm" fullWidth>Execute</Button>
+                          <Button variant="outline" size="sm" fullWidth>Details</Button>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              </div>
+            )}
+          </>
         )}
       </motion.div>
     </div>

@@ -32,6 +32,16 @@ export const agentService = {
     }
   },
 
+  getHostAgents: async () => {
+    try {
+      const response = await api.get('/api/host-agents')
+      return response.data || []
+    } catch (error) {
+      console.error('Error fetching host agents:', error)
+      throw error
+    }
+  },
+
   getAgentById: async (agentId) => {
     try {
       const response = await api.get(`/api/agents/${agentId}`)
