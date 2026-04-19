@@ -2,14 +2,19 @@
   "name": "Data Analysis Agent",
   "description": "Analyzes data and generates insights",
   "is_mcp": false,
+  "model_config": {
+    "type": "google",
+    "id": "gemini-2.5-flash-lite",
+    "max_tokens": 2048
+  },
   "config": {
     "name": "Data Analysis Agent",
     "description": "Analyzes data and generates insights",
     "role": "Data Analyst",
     "model_config": {
-      "type": "azure",
-      "id": "gpt-4o",
-      "max_tokens": 4096
+      "type": "google",
+      "id": "gemini-2.5-flash-lite",
+      "max_tokens": 2048
     },
     "instructions": [
       "Analyze data patterns",

@@ -7,9 +7,9 @@
     "description": "Coordinates multiple agents for complex tasks",
     "mode": "coordinate",
     "model_config": {
-      "type": "azure",
-      "id": "gpt-4o",
-      "max_tokens": 16384
+      "type": "google",
+      "id": "gemini-2.5-flash-lite",
+      "max_tokens": 4096
     },
     "instructions": [
       "Coordinate between different agent types",

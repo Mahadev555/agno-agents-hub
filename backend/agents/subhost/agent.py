@@ -31,30 +31,60 @@ class AgentWorkflow(Workflow):
         )
         self.dynamic_team = None
         self.mcp_stack = None
-    async def initialize_team(self, agent_ids=None):
+    async def initialize_team(self, agent_ids=None, host_agent_id=None, execution_mode="single"):
         """Initialize the dynamic team with database configurations
         
         Args:
-            agent_ids (List[str], optional): List of agent IDs to include in the team
+            agent_ids (List[int], optional): List of agent IDs to include in the team.
+                                            If provided, creates a dynamic team with only these agents.
+                                            If None, creates team with all available agents.
+            host_agent_id (int, optional): ID of the host agent for team coordination mode
+            execution_mode (str): "single" for single agent, "team" for team with host coordination
         """
         try:
             logger.info("📊 Loading agent configurations from database...")
-
-            # Get host agent config
-            team_config = get_host_agent_config_by_name("Mixed Agent Team")
-            if not team_config:
-                raise ValueError("Host agent 'Mixed Agent Team' configuration not found in database")
 
             # Get agent configs based on agent_ids or all if none provided
             if agent_ids:
                 from models.agents_model import get_agent_configs_by_ids
                 agent_configs = get_agent_configs_by_ids(agent_ids)
-                logger.info(f"🔍 Loading configurations for {len(agent_ids)} specific agents")
+                logger.info(f"🔍 Loading configurations for {len(agent_ids)} specific agents (IDs: {agent_ids})")
+                
+                if execution_mode == "team" and host_agent_id:
+                    # Team mode with host coordination
+                    from models.agents_model import get_agent_configs_by_ids as get_host_config
+                    from services.database_service import DatabaseService
+                    
+                    host_agent = DatabaseService.get_host_agent_by_id(host_agent_id)
+                    if not host_agent:
+                        raise ValueError(f"Host agent {host_agent_id} not found")
+                    
+                    team_config = host_agent.get("config", {})
+                    logger.info(f"✅ Using host agent {host_agent.get('name')} for team coordination")
+                else:
+                    # Single agent or team without specific host config
+                    team_config = {
+                        "name": f"Dynamic Team - Agents {agent_ids}",
+                        "mode": "coordinate" if execution_mode == "team" else "standalone",
+                        "instructions": ["Execute the task with the selected agents"] if execution_mode == "team" else [],
+                        "additional_params": {}
+                    }
+                    if execution_mode == "single":
+                        logger.info(f"✅ Created single agent config")
+                    else:
+                        logger.info(f"✅ Created dynamic team config for specific agents")
             else:
                 from models.agents_model import get_all_agent_configs
                 agent_configs = get_all_agent_configs()
                 logger.info("🔍 Loading configurations for all available agents")
-            logger.info("✅ Loaded configurations:")
+                
+                # Get host agent config for all agents
+                team_config = get_host_agent_config_by_name("Mixed Agent Team")
+                if not team_config:
+                    raise ValueError("Host agent 'Mixed Agent Team' configuration not found in database")
+                logger.info(f"✅ Using Mixed Agent Team config for all agents")
+            
+            logger.info(f"✅ Loaded {len(agent_configs)} agent configuration(s)")
 
             # Create async exit stack for MCP tools
             self.mcp_stack = AsyncExitStack()
@@ -176,13 +206,23 @@ class AgentWorkflow(Workflow):
         
         return responses
 
-async def run_agent_task(prompt: str = None, agent_ids: list[int] = None, **kwargs) -> Dict[str, Any]:
+async def run_agent_task(
+    prompt: str = None, 
+    agent_ids: list[int] = None, 
+    host_agent_id: int = None,
+    execution_mode: str = "single",
+    **kwargs
+) -> Dict[str, Any]:
     """
     Run agent task with dynamic configuration from database and return response.
+    
+    Supports both single agent and team execution modes.
     
     Args:
         prompt (str): Custom prompt for the agent task
         agent_ids (list[int]): List of agent IDs to use
+        host_agent_id (int, optional): Host agent ID for team coordination
+        execution_mode (str): "single" or "team"
         **kwargs: Additional parameters
         
     Returns:
@@ -195,7 +235,11 @@ async def run_agent_task(prompt: str = None, agent_ids: list[int] = None, **kwar
         )
         
         # Initialize the team with specific agent_ids or all agents
-        await workflow.initialize_team(agent_ids=agent_ids)
+        await workflow.initialize_team(
+            agent_ids=agent_ids,
+            host_agent_id=host_agent_id,
+            execution_mode=execution_mode
+        )
         
         # Execute the workflow and get response iterator
         workflow_result = list(workflow.run(prompt=prompt, **kwargs))
@@ -206,11 +250,13 @@ async def run_agent_task(prompt: str = None, agent_ids: list[int] = None, **kwar
             logger.info(f"Workflow result: {last_result.content}")
             return {
                 "status": "completed",
-                "message": "Agent task executed successfully",
+                "message": "Task executed successfully",
                 "content": last_result.content,
                 "prompt": prompt,
                 "parameters": kwargs,
-                "agent_ids": agent_ids
+                "agent_ids": agent_ids,
+                "host_agent_id": host_agent_id,
+                "execution_mode": execution_mode
             }
         else:
             logger.warning("No workflow result found")
@@ -220,7 +266,9 @@ async def run_agent_task(prompt: str = None, agent_ids: list[int] = None, **kwar
                 "content": None,
                 "prompt": prompt,
                 "parameters": kwargs,
-                "agent_ids": agent_ids
+                "agent_ids": agent_ids,
+                "host_agent_id": host_agent_id,
+                "execution_mode": execution_mode
             }
             
     except Exception as e:
@@ -233,7 +281,9 @@ async def run_agent_task(prompt: str = None, agent_ids: list[int] = None, **kwar
             "content": None,
             "prompt": prompt,
             "parameters": kwargs,
-            "agent_ids": agent_ids
+            "agent_ids": agent_ids,
+            "host_agent_id": host_agent_id,
+            "execution_mode": execution_mode
         }
 
 

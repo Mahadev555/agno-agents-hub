@@ -13,9 +13,9 @@
     "description": "Handles HR operations and candidate sourcing via MCP",
     "role": "HR Specialist",
     "model_config": {
-      "type": "azure",
-      "id": "gpt-4o",
-      "max_tokens": 8192
+      "type": "google",
+      "id": "gemini-2.5-flash-lite",
+      "max_tokens": 4096
     },
     "instructions": [
       "Use MCP tools for HR operations",

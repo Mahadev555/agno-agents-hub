@@ -4,6 +4,7 @@ from agno.team import Team
 from agno.tools.duckduckgo import DuckDuckGoTools  
 from pydantic import BaseModel, Field  
 from typing import List  
+from agno.models.google import Gemini
 
 from dotenv import load_dotenv  
 
@@ -20,7 +21,7 @@ class CompanyInfo(BaseModel):
 # Agent 1: Research Agent  
 research_agent = Agent(  
     name="Company Researcher",  
-    model=AzureOpenAI("gpt-4o"),  
+    model=Gemini(id="gemini-2.5-flash-lite"),  
     role="Research companies and gather detailed information",  
     tools=[DuckDuckGoTools()],  
     instructions=[  
@@ -33,7 +34,7 @@ research_agent = Agent(
 # Agent 2: JSON Creator Agent    
 json_creator = Agent(  
     name="JSON Creator",  
-    model=AzureOpenAI("gpt-4o"),  
+    model=Gemini(id="gemini-2.5-flash-lite"),  
     role="Structure research data into JSON format",  
     instructions=[  
         "Take the research findings from the research agent",  
@@ -46,14 +47,13 @@ json_creator = Agent(
 company_team = Team(  
     name="Company Analysis Team",  
     mode="coordinate",  
-    model=AzureOpenAI("gpt-4o"),  
+    model=Gemini(id="gemini-2.5-flash-lite"),  
     members=[research_agent, json_creator],  
     instructions=[  
         "First, have the research agent gather company information",  
         "Then, have the JSON creator structure the findings into JSON format",  
         "Ensure all research data is properly formatted"  
     ],  
-    response_model=CompanyInfo,  
     show_tool_calls=True,  
     markdown=True,  
     show_members_responses=True,  

@@ -10,6 +10,7 @@ from agno.team import Team
 from agno.tools.mcp import MCPTools  
 from agno.tools.duckduckgo import DuckDuckGoTools  
 from dotenv import load_dotenv  
+from agno.models.google import Gemini
 
 load_dotenv()  
 async def create_dynamic_team_with_mcp(  
@@ -117,21 +118,23 @@ def _create_simple_agent(agent_config: Dict[str, Any]) -> Agent:
     return agent
   
 def _get_model_from_config(model_config: Dict[str, Any]):  
-    """Create model instance from configuration."""  
-    model_type = model_config.get("type", "openai")  
+    """Create model instance from configuration.
+    
+    Uses gemini-2.5-flash-lite as default for all agents unless explicitly configured otherwise.
+    """  
+    model_type = model_config.get("type", "google")  
+    model_id = model_config.get("id", "gemini-2.5-flash-lite")
       
     if model_type == "azure":  
         return AzureOpenAI(  
-            id=model_config.get("id", "gpt-4o"),  
+            id=model_id if model_id.startswith("gpt") else "gpt-4o",  
             max_tokens=model_config.get("max_tokens", 16384),  
             api_version=model_config.get("api_version") or os.getenv("AZURE_OPENAI_API_VERSION"),  
             **model_config.get("additional_params", {})  
         )  
     else:
-        return OpenAIChat(  
-            id=model_config.get("id", "gpt-4o"),  
-            **model_config.get("additional_params", {})  
-        )  
+        # Default to gemini-2.5-flash-lite for all Google models
+        return Gemini(id=model_id)
   
 def _get_tools_from_config(tool_names: List[str]) -> List:  
     """Map tool names to actual tool instances for simple agents."""  
