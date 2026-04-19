@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Trash2, Copy } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
 import { agentService } from '../services/api'
 import Button from './Button'
 
@@ -17,8 +18,16 @@ const ChatPlayground = () => {
   const messagesEndRef = useRef(null)
 
   useEffect(() => {
-    fetchAgents()
-    addSystemMessage('Welcome to Agno Hub Chat! Select agents and execute prompts.')
+    const initializeChat = async () => {
+      await fetchAgents()
+    }
+    initializeChat()
+    setMessages([{
+      id: Date.now().toString(),
+      text: 'Welcome to Agno Hub Chat! Select agents and execute prompts.',
+      role: 'system',
+      timestamp: new Date(),
+    }])
   }, [])
 
   useEffect(() => {
@@ -31,8 +40,8 @@ const ChatPlayground = () => {
       const agentList = Array.isArray(data) ? data : []
       setAgents(agentList)
       if (agentList.length > 0) {
-        setSelectedAgent(agentList[0].id)
-        setSelectedHostAgent(agentList[0].id)
+        setSelectedAgent(agentList[0].agent_id)
+        setSelectedHostAgent(agentList[0].agent_id)
       }
     } catch (err) {
       console.error('Failed to fetch agents:', err)
@@ -72,7 +81,7 @@ const ChatPlayground = () => {
 
     try {
       const response = await agentService.executeSingleAgent(selectedAgent, input)
-      addMessage(response.result || response.error || 'No response', 'agent')
+      addMessage(response.response || 'No response', 'agent')
     } catch (err) {
       setError('Execution failed')
       addMessage('Error: ' + err.message, 'error')
@@ -91,7 +100,7 @@ const ChatPlayground = () => {
 
     try {
       const response = await agentService.executeTeam(selectedHostAgent, selectedMembers, input)
-      addMessage(response.result || response.error || 'Team execution complete', 'agent')
+      addMessage(response.response || 'Team execution complete', 'agent')
     } catch (err) {
       setError('Team execution failed')
       addMessage('Error: ' + err.message, 'error')
@@ -148,8 +157,8 @@ const ChatPlayground = () => {
               className="input-primary"
             >
               {agents.map(agent => (
-                <option key={agent.id} value={agent.id}>
-                  {agent.name} ({agent.role})
+                <option key={agent.agent_id} value={agent.agent_id}>
+                  {agent.name}{agent.role ? ` (${agent.role})` : ''}
                 </option>
               ))}
             </select>
@@ -164,8 +173,8 @@ const ChatPlayground = () => {
                 className="input-primary"
               >
                 {agents.map(agent => (
-                  <option key={agent.id} value={agent.id}>
-                    {agent.name} ({agent.role})
+                  <option key={agent.agent_id} value={agent.agent_id}>
+                    {agent.name}{agent.role ? ` (${agent.role})` : ''}
                   </option>
                 ))}
               </select>
@@ -173,13 +182,13 @@ const ChatPlayground = () => {
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2">Team Members</label>
               <div className="flex flex-wrap gap-2">
-                {agents.filter(a => a.id !== selectedHostAgent).map(agent => (
+                {agents.filter(a => a.agent_id !== selectedHostAgent).map(agent => (
                   <motion.button
-                    key={agent.id}
+                    key={agent.agent_id}
                     whileHover={{ scale: 1.05 }}
-                    onClick={() => toggleMember(agent.id)}
+                    onClick={() => toggleMember(agent.agent_id)}
                     className={`px-3 py-2 rounded-lg font-medium transition-all ${
-                      selectedMembers.includes(agent.id)
+                      selectedMembers.includes(agent.agent_id)
                         ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white'
                         : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                     }`}
@@ -204,7 +213,7 @@ const ChatPlayground = () => {
               exit={{ opacity: 0, y: -10 }}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`max-w-xs px-4 py-2 rounded-lg ${
+              <div className={`max-w-xl px-4 py-3 rounded-lg ${
                 msg.role === 'user'
                   ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white'
                   : msg.role === 'system'
@@ -213,7 +222,26 @@ const ChatPlayground = () => {
                   ? 'bg-red-100 text-red-700'
                   : 'bg-slate-200 text-slate-900'
               }`}>
-                <p className="text-sm">{msg.text}</p>
+                {msg.role === 'agent' || msg.role === 'system' ? (
+                  <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                    <ReactMarkdown
+                      components={{
+                        p: ({children}) => <p className="mb-2 last:mb-0">{children}</p>,
+                        ul: ({children}) => <ul className="list-disc list-inside mb-2">{children}</ul>,
+                        ol: ({children}) => <ol className="list-decimal list-inside mb-2">{children}</ol>,
+                        li: ({children}) => <li className="mb-1">{children}</li>,
+                        strong: ({children}) => <strong className="font-semibold">{children}</strong>,
+                        em: ({children}) => <em className="italic">{children}</em>,
+                        code: ({children}) => <code className="bg-black/20 px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>,
+                        a: ({href, children}) => <a href={href} className="underline hover:opacity-80">{children}</a>,
+                      }}
+                    >
+                      {msg.text}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <p className="text-sm">{msg.text}</p>
+                )}
                 {msg.role === 'agent' && (
                   <motion.button
                     whileHover={{ scale: 1.1 }}
@@ -226,6 +254,27 @@ const ChatPlayground = () => {
               </div>
             </motion.div>
           ))}
+          {loading && (
+            <motion.div
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="flex justify-start"
+            >
+              <div className="bg-slate-200 text-slate-900 px-4 py-3 rounded-lg flex items-center gap-2">
+                <span className="text-sm font-medium"></span>
+                <motion.div
+                  animate={{ opacity: [0.4, 1, 0.4] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                  className="flex gap-1"
+                >
+                  <div className="w-2 h-2 bg-slate-600 rounded-full" />
+                  <div className="w-2 h-2 bg-slate-600 rounded-full" />
+                  <div className="w-2 h-2 bg-slate-600 rounded-full" />
+                </motion.div>
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
         <div ref={messagesEndRef} />
       </div>

@@ -79,7 +79,7 @@ const AgentComponent = () => {
           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
         >
           {agents.map(agent => (
-            <motion.div key={agent.id} variants={itemVariants}>
+            <motion.div key={agent.agent_id} variants={itemVariants}>
               <div className={`card p-6 card-hover bg-gradient-to-br ${getAgentColor(agent)} bg-opacity-5`}>
                 <div className="flex justify-between items-start mb-4">
                   <div className={`text-5xl`}>
@@ -194,7 +194,7 @@ const AgentComponent = () => {
 
                 <div className="p-4 bg-slate-100 rounded-lg">
                   <p className="text-xs text-slate-700 font-mono">
-                    ID: {selectedAgent.id}
+                    ID: {selectedAgent.agent_id}
                   </p>
                   <p className="text-xs text-slate-700 font-mono mt-1">
                     Status: {selectedAgent.is_active ? 'Active' : 'Inactive'}

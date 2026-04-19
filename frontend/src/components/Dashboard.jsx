@@ -104,7 +104,7 @@ const Dashboard = () => {
             className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
           >
             {agents.map((agent, idx) => (
-              <motion.div key={agent.id} variants={itemVariants}>
+              <motion.div key={agent.agent_id} variants={itemVariants}>
                 <div className="card p-6 card-hover">
                   <div className="flex justify-between items-start mb-4">
                     <div className="text-4xl">

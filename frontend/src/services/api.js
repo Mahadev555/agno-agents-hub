@@ -45,7 +45,7 @@ export const agentService = {
   executeSingleAgent: async (agentId, prompt) => {
     try {
       const response = await api.post('/api/agent/run', {
-        agent_id: agentId,
+        agentId: agentId,
         prompt: prompt,
       })
       return response.data
@@ -58,8 +58,8 @@ export const agentService = {
   executeTeam: async (hostAgentId, memberAgentIds, prompt) => {
     try {
       const response = await api.post('/api/team/run', {
-        host_agent_id: hostAgentId,
-        agent_ids: memberAgentIds,
+        hostAgentId: hostAgentId,
+        memberAgentIds: memberAgentIds,
         prompt: prompt,
       })
       return response.data
