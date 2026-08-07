@@ -1,18 +1,23 @@
-from fastapi import APIRouter, HTTPException, Request
-from typing import List, Dict, Any, Optional, Union
+import asyncio
+import json
+import logging
+from typing import Any, Dict, List, Optional, Union
+
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from controllers.agent_execution_controller import AgentExecutionController
 from controllers.agents_controller import (
-    AgentsController,
-    HostAgentsController,
     AgentCreateRequest,
+    AgentsController,
     AgentUpdateRequest,
     HostAgentCreateRequest,
+    HostAgentsController,
 )
-from controllers.agent_execution_controller import AgentExecutionController
-import logging
+from controllers.run_controller import RunController
+from services.run_bus import run_bus
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ======================= PYDANTIC MODELS =======================
@@ -359,3 +364,101 @@ async def run_team(request: TeamExecutionRequest):
         logger.error(f"❌ Error in team execution: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+
+# ======================= RUN ROUTES (streaming) =======================
+
+class RunCreateRequest(BaseModel):
+    """Start a run. One agent runs alone; several are coordinated by a host."""
+    prompt: str = Field(..., description="The task to execute", min_length=1)
+    agentIds: Optional[List[int]] = Field(None, description="Agent IDs to use")
+    hostAgentId: Optional[int] = Field(None, description="Coordinator for team mode")
+
+
+@router.post("/api/runs", status_code=202)
+async def create_run(request: RunCreateRequest):
+    """
+    Start a run and return immediately with its id.
+
+    Execution continues server-side regardless of what the client does next, so
+    a closed tab or a proxy timeout no longer discards the work. Subscribe to
+    /api/runs/{run_id}/events for progress, or poll /api/runs/{run_id}.
+    """
+    return RunController.start(
+        prompt=request.prompt,
+        agent_ids=request.agentIds,
+        host_agent_id=request.hostAgentId,
+    )
+
+
+@router.get("/api/runs")
+async def list_runs(
+    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = Query(None, description="Filter by run status"),
+):
+    """List recent runs, newest first."""
+    return RunController.list_recent(limit=limit, status=status)
+
+
+@router.get("/api/runs/{run_id}")
+async def get_run(run_id: str):
+    """Fetch a single run record."""
+    return RunController.get(run_id)
+
+
+@router.get("/api/runs/{run_id}/events")
+async def stream_run_events(run_id: str, request: Request):
+    """
+    Server-sent events for a run.
+
+    Replays everything already emitted before streaming live output, so a
+    client that subscribes slightly late still sees the whole run. If the run
+    has already finished, its terminal state is replayed from the database and
+    the stream closes immediately.
+    """
+    record = RunController.get(run_id)  # 404s for unknown ids
+
+    async def event_source():
+        channel = run_bus.get(run_id)
+
+        if channel is None:
+            # Not in flight: reconstruct a terminal event from the stored row.
+            if record["status"] == "completed":
+                payload = {"type": "completed", "output": record.get("output") or "",
+                           "usage": {"total_tokens": record.get("total_tokens")}}
+            elif record["status"] == "error":
+                payload = {"type": "error", "message": record.get("error") or "Run failed"}
+            else:
+                payload = {"type": "error",
+                           "message": "Run is not active on this server and has no result"}
+            yield _sse(payload)
+            return
+
+        try:
+            async for event in channel.subscribe():
+                yield _sse(event)
+        except asyncio.CancelledError:
+            # Raised into the generator when the client goes away; the finally
+            # block below still runs. An explicit is_disconnected() poll here
+            # would additionally drop the event already taken off the queue.
+            raise
+        finally:
+            # Drop the channel once it is closed and nobody is reading it.
+            if channel.closed:
+                run_bus.discard(run_id)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Stops nginx buffering the stream into uselessness.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(payload: Dict[str, Any]) -> str:
+    """Encode one event in the SSE wire format."""
+    return f"data: {json.dumps(payload)}\n\n"

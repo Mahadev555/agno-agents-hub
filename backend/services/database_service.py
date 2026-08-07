@@ -10,8 +10,6 @@ from sqlalchemy.orm import Session
 from connection import get_session
 from models.agent import Agent, HostAgent
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

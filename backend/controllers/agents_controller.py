@@ -10,8 +10,6 @@ from services.database_service import DatabaseService
 from services.agent_service import AgentService, HostAgentService
 from pydantic import BaseModel, ConfigDict, Field
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

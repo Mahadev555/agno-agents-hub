@@ -7,8 +7,6 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import OperationalError
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Load environment variables from .env file
@@ -79,8 +77,12 @@ def init_db(recreate_tables=False):
         recreate_tables: If True, drops existing tables before creating new ones
     """
     try:
-        from models.agent import Base
-        
+        # Import every model module before create_all so its table is in the
+        # shared metadata. A model that is never imported is never created.
+        from models.base import Base
+        from models import agent as _agent_models  # noqa: F401
+        from models import run as _run_models  # noqa: F401
+
         # Test connection first
         logger.info("Testing database connection...")
         with engine.connect() as conn:

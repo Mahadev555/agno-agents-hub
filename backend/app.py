@@ -4,6 +4,9 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from routes.routes import router
 from connection import init_db
+from logging_config import configure_logging
+from services.run_service import RunService
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -26,18 +29,20 @@ if "*" in ALLOWED_ORIGINS:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: anything that needs to happen before the app starts
-    print("=" * 60)
-    print("Starting agno_hub Hub API...")
-    print("=" * 60)
-    print("Initializing database...")
+    configure_logging()
+    log = logging.getLogger("agno_hub")
+
+    log.info("Starting agno_hub Hub API...")
     try:
         init_db()
-        print("[OK] API ready for requests")
+        # Runs execute in-process, so anything left mid-flight by a previous
+        # process can never finish. Close them out rather than leaving them
+        # stuck in `running` forever.
+        RunService.reap_orphans()
+        log.info("API ready for requests")
     except Exception as e:
-        print(f"[WARNING] Database initialization warning: {e}")
-        print("The API will run, but database operations may fail")
-    print("=" * 60)
+        log.warning(f"Database initialization failed: {e}")
+        log.warning("The API will run, but database operations may fail")
     yield
     # Shutdown: anything that needs to happen before the app stops
     print("=" * 60)

@@ -5,11 +5,11 @@ Database models for marketplace agents and orchestration.
 
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, Boolean, JSON, DateTime, Text
-from sqlalchemy.orm import declarative_base
 from sqlalchemy.dialects.postgresql import JSONB
 
-# Create base class for all models
-Base = declarative_base()
+# Base lives in models.base so every model shares one metadata registry.
+# Re-exported here because existing imports do `from models.agent import Base`.
+from models.base import Base, utcnow
 
 
 class Agent(Base):
@@ -34,8 +34,8 @@ class Agent(Base):
     config = Column(JSONB, nullable=False, default={})
     
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow, index=True)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     
     def to_dict(self):
         """Convert model instance to dictionary"""
@@ -84,8 +84,8 @@ class HostAgent(Base):
     config = Column(JSONB, nullable=False, default={})
     
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=utcnow, index=True)
+    updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
     
     def to_dict(self):
         """Convert model instance to dictionary"""

@@ -16,7 +16,9 @@ from agents.subhost.agent import (
     MCPConnectionError,
     run_agent_task,
 )
+from models.run import RunStatus
 from services.database_service import DatabaseService
+from services.run_service import RunService
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,47 @@ def _to_http_error(exc: AgentExecutionError) -> HTTPException:
         # An unreachable upstream is not the caller's mistake.
         return HTTPException(status_code=502, detail=str(exc))
     return HTTPException(status_code=400, detail=str(exc))
+
+
+async def _recorded(
+    prompt: str,
+    mode: str,
+    agent_ids: List[int],
+    host_agent_id: Optional[int],
+    coro_factory,
+) -> Dict[str, Any]:
+    """
+    Run a non-streaming execution while persisting a run record around it.
+
+    The blocking endpoints predate /api/runs but still belong in history, so
+    they write the same rows. The run id is threaded through as the session id
+    so logs from both paths correlate the same way.
+    """
+    record = RunService.create(
+        prompt=prompt, mode=mode, agent_ids=agent_ids, host_agent_id=host_agent_id
+    )
+    run_id = record["run_id"]
+    RunService.mark_running(run_id)
+
+    try:
+        result = await coro_factory(run_id)
+    except HTTPException as exc:
+        RunService.finish(run_id, RunStatus.ERROR, error=str(exc.detail))
+        raise
+    except Exception as exc:
+        RunService.finish(run_id, RunStatus.ERROR, error=str(exc))
+        raise
+
+    completed = result.get("status") == "completed"
+    RunService.finish(
+        run_id,
+        RunStatus.COMPLETED if completed else RunStatus.ERROR,
+        output=result.get("content"),
+        error=None if completed else result.get("message"),
+        usage=result.get("usage"),
+    )
+    result["run_id"] = run_id
+    return result
 
 
 class AgentExecutionController:
@@ -54,6 +97,26 @@ class AgentExecutionController:
         return agents
 
     @staticmethod
+    def _default_host_agent() -> Dict[str, Any]:
+        """
+        The coordinator used when several agents are requested without one.
+
+        Multiple agents cannot run without something to delegate between them,
+        so a missing default is a hard error rather than an arbitrary pick.
+        """
+        host_agent = DatabaseService.get_host_agent_by_name("Mixed Agent Team")
+        if not host_agent:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Multiple agents require a coordinator, but no hostAgentId was "
+                    "supplied and the default 'Mixed Agent Team' host agent does "
+                    "not exist."
+                ),
+            )
+        return host_agent
+
+    @staticmethod
     def _load_host_config(host_agent_id: int) -> Dict[str, Any]:
         """Load a host agent's config blob, 404ing if it does not exist."""
         host_agent = DatabaseService.get_host_agent_by_id(host_agent_id)
@@ -72,15 +135,26 @@ class AgentExecutionController:
     async def execute_single_agent(prompt: str, agent_id: int) -> Dict[str, Any]:
         """Execute one agent directly, with no team wrapper."""
         agents = AgentExecutionController._load_agents([agent_id])
-        try:
-            return await run_agent_task(
-                prompt=prompt,
-                agent_configs=agents,
-                execution_mode="single",
-            )
-        except AgentExecutionError as e:
-            logger.error(f"Single agent execution setup failed: {e}")
-            raise _to_http_error(e)
+
+        async def _run(run_id: str) -> Dict[str, Any]:
+            try:
+                return await run_agent_task(
+                    prompt=prompt,
+                    agent_configs=agents,
+                    execution_mode="single",
+                    session_id=run_id,
+                )
+            except AgentExecutionError as e:
+                logger.error(f"[{run_id}] single agent setup failed: {e}")
+                raise _to_http_error(e)
+
+        return await _recorded(
+            prompt=prompt,
+            mode="single",
+            agent_ids=[agent_id],
+            host_agent_id=None,
+            coro_factory=_run,
+        )
 
     @staticmethod
     async def execute_team(
@@ -92,17 +166,26 @@ class AgentExecutionController:
         host_config = AgentExecutionController._load_host_config(host_agent_id)
         agents = AgentExecutionController._load_agents(member_agent_ids)
 
-        try:
-            result = await run_agent_task(
-                prompt=prompt,
-                agent_configs=agents,
-                host_config=host_config,
-                execution_mode="team",
-            )
-        except AgentExecutionError as e:
-            logger.error(f"Team execution setup failed: {e}")
-            raise _to_http_error(e)
+        async def _run(run_id: str) -> Dict[str, Any]:
+            try:
+                return await run_agent_task(
+                    prompt=prompt,
+                    agent_configs=agents,
+                    host_config=host_config,
+                    execution_mode="team",
+                    session_id=run_id,
+                )
+            except AgentExecutionError as e:
+                logger.error(f"[{run_id}] team setup failed: {e}")
+                raise _to_http_error(e)
 
+        result = await _recorded(
+            prompt=prompt,
+            mode="team",
+            agent_ids=member_agent_ids,
+            host_agent_id=host_agent_id,
+            coro_factory=_run,
+        )
         result["host_agent_id"] = host_agent_id
         return result
 
@@ -127,17 +210,7 @@ class AgentExecutionController:
             )
 
         if host_agent_id is None:
-            host_agent = DatabaseService.get_host_agent_by_name("Mixed Agent Team")
-            if not host_agent:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "Multiple agents require a coordinator, but no hostAgentId was "
-                        "supplied and the default 'Mixed Agent Team' host agent does "
-                        "not exist."
-                    ),
-                )
-            host_agent_id = host_agent["agent_id"]
+            host_agent_id = AgentExecutionController._default_host_agent()["agent_id"]
 
         return await AgentExecutionController.execute_team(
             prompt=prompt,
