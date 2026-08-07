@@ -1,429 +1,183 @@
-# Agent Marketplace Backend - Architecture & Implementation Guide
+# Architecture
 
-## 📋 Overview
-
-Your backend is now a **modular Agent Marketplace** where:
-- ✅ Agents are defined in JSON config files
-- ✅ Configs are stored in a PostgreSQL database using SQLAlchemy ORM
-- ✅ Agents are dynamically created from DB configs at runtime
-- ✅ Multiple agent types are supported (simple, MCP, host/orchestrator)
-- ✅ Full CRUD APIs for managing agents
-- ✅ Service layer for business logic
-- ✅ Seeder script to populate DB from JSON files
+Why the backend is shaped the way it is. For the API reference see [README.md](./README.md).
 
 ---
 
-## 🏗️ **Architecture**
+## The core idea
+
+Agents are **data**. Their configuration lives in PostgreSQL as validated JSONB and is hydrated into live Agno objects at request time. Nothing is deployed to add an agent.
+
+That only works if the boundary is respected in one direction:
 
 ```
-backend/
-├── models/
-│   ├── agent.py ..................... SQLAlchemy models (Agent, HostAgent)
-│   └── __init__.py
-│
-├── services/
-│   ├── database_service.py ........... Low-level DB queries
-│   ├── agent_service.py ............. Business logic for agents
-│   └── __init__.py
-│
-├── controllers/
-│   ├── agents_controller.py ......... API request handlers + Pydantic models
-│   └── agent_execution_controller.py  Task execution logic
-│
-├── routes/
-│   └── routes.py .................... API endpoints (CRUD + execution)
-│
-├── agents/
-│   ├── configs/ ..................... JSON agent configurations
-│   │   ├── simple_agents/
-│   │   │   ├── research_agent.json
-│   │   │   ├── data_analyst_agent.json
-│   │   │   └── ...
-│   │   ├── mcp_agents/
-│   │   │   ├── hr_specialist.json
-│   │   │   └── ...
-│   │   └── host_config.json
-│   ├── hosts/
-│   │   ├── host_agent.py ........... Creates dynamic teams
-│   │   └── __init__.py
-│   ├── subhost/
-│   │   ├── agent.py ............... Orchestrates agent execution
-│   │   └── __init__.py
-│   └── __init__.py
-│
-├── seed_database.py ................ Seeder script
-├── connection.py ................... SQLAlchemy setup
-├── app.py .......................... FastAPI setup + DB init
-└── requirements.txt ................ Dependencies
+schemas/   models/     <-- describe agents as data. Do NOT import agno.
+runtime/   agents/     <-- the only layers that know Agno exists.
 ```
+
+If the registry layer imported Agno, a change to `Team`'s signature would ripple into the database layer. Keeping the import one-way is what makes the framework replaceable.
 
 ---
 
-## 📊 **Database Schema**
+## Request flow
 
-### `agents` table
-```sql
-- agent_id (PK)
-- name (UNIQUE)
-- description
-- agent_type (simple, mcp, host)
-- is_mcp (boolean)
-- is_active (boolean)
-- system_instructions (TEXT)
-- tools (JSON array) - ["duckduckgo", "wikipedia"]
-- model_config (JSONB) - LLM configuration
-- config (JSONB) - Full agent configuration
-- created_at (timestamp)
-- updated_at (timestamp)
+### Creating an agent
+
 ```
-
-### `host_agent` table
-```sql
-- agent_id (PK)
-- name (UNIQUE)
-- description
-- is_mcp (boolean)
-- is_active (boolean)
-- mode (coordinate, sequential, parallel)
-- model_config (JSONB)
-- instructions (JSON array)
-- additional_params (JSONB)
-- config (JSONB)
-- created_at (timestamp)
-- updated_at (timestamp)
-```
-
----
-
-## 🚀 **Getting Started**
-
-### Step 1: Initialize Database
-```bash
-cd backend
-python seed_database.py
-```
-
-This will:
-- Create database tables automatically
-- Load agents from JSON files in `agents/configs/`
-- Populate the database with sample agents
-
-### Step 2: Verify Setup
-```bash
-python -c "from services.database_service import DatabaseService; print(DatabaseService.get_all_agents())"
-```
-
-### Step 3: Start the API
-```bash
-python -m uvicorn app:app --reload
-```
-
-The API will be available at: **http://localhost:5000**
-
----
-
-## 🔌 **API Endpoints**
-
-### **Agent Management**
-
-#### GET Endpoints
-```
-GET  /api/agents              - Get all agents
-GET  /api/agents/active       - Get active agents only
-GET  /api/agents/type/{type}  - Get agents by type (simple, mcp, host)
-GET  /api/agents/mcp          - Get all MCP agents
-GET  /api/agents/name/{name}  - Get agent by name
-GET  /api/agents/{id}         - Get agent by ID
-```
-
-#### CREATE
-```bash
 POST /api/agents
-Content-Type: application/json
-
-{
-  "name": "My Agent",
-  "description": "Does something useful",
-  "agent_type": "simple",
-  "is_mcp": false,
-  "system_instructions": "You are...",
-  "tools": ["duckduckgo"],
-  "model_config": {
-    "type": "azure",
-    "id": "gpt-4o",
-    "max_tokens": 4096
-  },
-  "config": {
-    "name": "My Agent",
-    "tools": ["duckduckgo"],
-    ...all agent config fields
-  }
-}
+  routes/            get_current_user -> 401 if no valid token
+  controllers/       attach owner_id
+  schemas/           AgentConfig validates: tools, model provider, unknown keys
+  services/          uniqueness check, INSERT
 ```
 
-#### UPDATE
-```bash
-PUT /api/agents/{id}
-Content-Type: application/json
+Validation happens **here**, on write. An unknown tool name is a `400` at create time rather than a failure when someone runs the agent three days later.
 
-{
-  "description": "Updated description",
-  "system_instructions": "New instructions",
-  "is_active": true
-}
-```
-
-#### DELETE
-```bash
-DELETE /api/agents/{id}
-```
-
-### **Host Agent Management**
+### Running an agent
 
 ```
-GET  /api/host-agents       - Get all host agents
-GET  /api/host-agents/{id}  - Get host agent by ID
-POST /api/host-agents       - Create host agent
+POST /api/runs
+  routes/            authenticate
+  controllers/run_   rate limit -> resolve composition -> INSERT run (pending)
+                     -> open bus channel -> schedule asyncio task -> 202 {run_id}
+
+  [background]       mark running
+                     agents/subhost   build Agent or Team
+                     runtime/         registries + MCP egress check
+                     agno             arun(stream=True)
+                     -> normalise events -> publish to bus -> UPDATE run (terminal)
+
+GET /api/runs/{id}/events
+  routes/            authenticate (header or ?access_token=)
+  services/run_bus   replay buffer, then live events
 ```
 
-### **Agent Execution**
-
-```
-POST /api/chat
-Content-Type: application/json
-
-{
-  "prompt": "Research company XYZ",
-  "agentIds": [1, 2]  // Optional - specific agents to use
-}
-```
+The `202` returns before the work is done. Everything needed to reject a bad request — missing agent, no read access, over quota — is resolved *before* scheduling, so those are synchronous errors rather than something the client discovers over the event stream.
 
 ---
 
-## 📝 **Agent Configuration Format**
+## Decisions worth knowing
 
-### Simple Agent (tools-based)
-```json
-{
-  "name": "My Agent",
-  "description": "What it does",
-  "system_instructions": "Your behavior and role",
-  "tools": ["tool1", "tool2"],
-  "model_config": {
-    "type": "azure",
-    "id": "gpt-4o",
-    "max_tokens": 4096
-  }
-}
-```
+### Execution is decoupled from the HTTP request
 
-### MCP Agent (Model Context Protocol)
-```json
-{
-  "name": "MCP Agent",
-  "description": "MCP-enabled agent",
-  "system_instructions": "Your role",
-  "mcp_config": {
-    "url": "http://localhost:3001/sse",
-    "transport": "sse",
-    "timeout_seconds": 300
-  },
-  "model_config": {
-    "type": "azure",
-    "id": "gpt-4o",
-    "max_tokens": 8192
-  }
-}
-```
+A coordinated team run is several sequential LLM calls and routinely takes 20-60s. When execution lived inside the request handler, a closed tab or a proxy timeout aborted work that had already spent tokens, and the client got nothing.
 
-### Host Agent (Orchestrator)
-```json
-{
-  "name": "Orchestrator",
-  "description": "Coordinates multiple agents",
-  "mode": "coordinate",
-  "instructions": [
-    "Route tasks to appropriate agents",
-    "Synthesize responses"
-  ],
-  "model_config": {
-    "type": "azure",
-    "id": "gpt-4o",
-    "max_tokens": 16384
-  },
-  "additional_params": {
-    "show_tool_calls": true,
-    "markdown": true
-  }
-}
-```
+Now the run is an `asyncio` task with a durable row. The connection can drop at any point; the run finishes and the result is in the database.
+
+*Cost:* a run in flight when the process dies can never finish. `RunService.reap_orphans()` closes those out at startup rather than leaving them stuck in `running` forever.
+
+### One async path, no thread hopping
+
+Everything from the route to `agno.arun()` is `async` on one event loop.
+
+An earlier version wrapped execution in a synchronous `Workflow.run()` that spawned a thread and created a *new* event loop. MCP sessions were entered on the outer loop and used on the inner one, which is undefined behaviour — hangs, `Event loop is closed`, or leaked subprocesses.
+
+MCP sessions are now entered into an `AsyncExitStack` **inside the same coroutine that runs the agent**, so they are always created and closed on the loop that uses them.
+
+### Configuration is typed and validated on write
+
+`config` was `Dict[str, Any]`, validated nowhere. Defaults were hand-patched in the HTTP layer with eight `if 'x' not in config` blocks, and the seeder bypassed that entirely — so the API and the seeder disagreed about what an agent looked like.
+
+`schemas/agent_config.py` is now the single definition. `extra="forbid"` means a typo (`instuctions`) is an error rather than a silently ignored key.
+
+The LLM section is stored under both `model` and `model_config`. `model_config` is a **reserved attribute name in Pydantic v2**, so the field is `model`; the legacy key is kept readable for existing rows and consumed unconditionally when parsing.
+
+### Registries, not hardcoded maps
+
+Tool and model lookups were dicts inside the agent factory where an unknown tool was **silently dropped** and an unknown model type **silently became Gemini**. An agent configured with a typo produced a working-looking agent that quietly did less than asked.
+
+`runtime/registry.py` raises instead, and the config schema calls into it, so bad names are caught at save time.
+
+Tools are registered as **factories, not instances** — otherwise every agent in the process shares one tool object.
+
+### One `agents` table, discriminated by `kind`
+
+`agents` and `host_agent` were separate tables with ~90% identical columns, duplicated services, duplicated controllers, and an `is_host` boolean threaded through the routes. A coordinator is an agent with a coordinating role.
+
+`agent_type` and `is_mcp` remain in API responses, derived from `kind`, so existing clients keep working.
+
+### Teams are a first-class entity
+
+Composition used to be sent by the client on every request. That meant a team could not be named, saved, shared, or versioned, and any caller could compose arbitrary agents.
+
+`teams` + `team_members` persist it. `mode` lives on the **team**, not the coordinator, because the same host can drive different teams differently.
+
+`host_agent_id` is `ON DELETE RESTRICT`: deleting a coordinator that a team depends on returns `409` instead of leaving the team unrunnable. (This constraint has already prevented one accidental mass delete.)
+
+### Ownership, and why hidden resources return 404
+
+`owner_id` on agents, teams, and runs; `is_public` for marketplace visibility.
+
+A resource the caller may not read returns **404, not 403**. A 403 confirms the id exists, which turns the endpoint into an enumeration oracle.
+
+Public means **readable, never writable**. Sharing an agent must not let a stranger edit or delete it.
+
+Rows created before auth have `owner_id IS NULL`. Those are readable by all but writable only by an administrator — treating them as unowned rather than as everyone's property.
+
+### The run bus is in-process, deliberately
+
+`services/run_bus.py` fans events out to SSE subscribers and keeps a bounded replay buffer, so a client that subscribes a moment after `POST /api/runs` still receives the whole run instead of joining mid-sentence.
+
+It is in-memory and single-process. With multiple workers a client could subscribe to a worker that is not executing its run — which is why `WEB_CONCURRENCY=1` in the Dockerfile. Terminal state is always recoverable from the `runs` table regardless, and the SSE endpoint falls back to replaying it from the database when no channel exists.
+
+Redis is the fix when horizontal scaling is needed.
+
+### Schema belongs to Alembic
+
+`create_all()` cannot `ALTER` an existing table. Leaving it in the startup path meant column changes were silently skipped while the app appeared healthy. `init_db()` now only verifies connectivity.
+
+### Errors carry their cause
+
+anyio task groups (used by the MCP client) wrap real failures in an `ExceptionGroup` whose `str()` is the useless `"unhandled errors in a TaskGroup (1 sub-exception)"`. `_describe_exception` unwraps it so the caller sees `ConnectError: All connection attempts failed`.
+
+Status codes reflect fault: `400` for a bad configuration, `502` for an unreachable MCP server, `404` for anything the caller may not see, `429` when over quota.
 
 ---
 
-## ✅ **Is Your Approach Good?**
+## Known limits
 
-### Strengths ✨
+| Limit | Consequence | Fix |
+|---|---|---|
+| In-process run bus | One worker only | Move to Redis |
+| Tests share `DATABASE_URL` | Running pytest writes to the app's database | Separate test database |
+| SSE token in query string | Appears in access logs | Single-use stream ticket |
+| No refresh tokens | Users re-authenticate when the token expires | Refresh flow |
+| `models/agents_model.py` | Dead code, unused since Week 1 | Delete |
+| `test_agent.py` | Manual script, not a test | Delete or convert |
 
-1. **Separation of Concerns** ✅
-   - Models for DB schema
-   - Services for business logic
-   - Controllers for API logic
-   - Routes for endpoints
+---
 
-2. **Dynamic Agent Creation** ✅
-   - Agents from JSON configs
-   - No hardcoding in code
-   - Easy to add new agents
+## Extending
 
-3. **Scalability** ✅
-   - DatabaseService handles all queries
-   - AgentService handles business logic
-   - Can add caching, permissions later
-
-4. **Multi-Agent Support** ✅
-   - Simple agents with tools
-   - MCP agents for complex tasks
-   - Host agents for orchestration
-
-5. **Type Safety** ✅
-   - SQLAlchemy ORM (compile-time errors)
-   - Pydantic models (validation)
-   - Type hints throughout
-
-### Recommended Enhancements
-
-For a **marketplace**, add:
+**Add a tool**
 
 ```python
-# In Agent model (future):
-- created_by (user_id) - Who created the agent
-- is_published (bool) - Visibility in marketplace
-- version (int) - Agent versioning
-- rating (float) - Community ratings
-- usage_count (int) - Popularity metric
-- tags (JSON) - Categorization
-- price (decimal) - If selling agents
+# runtime/registry.py
+@register_tool("wikipedia")
+def _wikipedia():
+    from agno.tools.wikipedia import WikipediaTools
+    return WikipediaTools()
 ```
 
----
+It becomes valid in agent configs immediately, and invalid names keep failing on save.
 
-## 🔄 **Workflow: Creating Agents**
+**Add a model provider**
 
-### Approach 1: Via JSON Files (Recommended for initial setup)
-```bash
-1. Create JSON in agents/configs/simple_agents/ or mcp_agents/
-2. Run: python seed_database.py
-3. Agent is now in DB and available via API
-```
-
-### Approach 2: Via API
-```bash
-POST /api/agents
-{
-  "name": "New Agent",
-  "description": "...",
-  "config": {...}
-}
-```
-
-### Approach 3: Programmatically
 ```python
-from services.agent_service import AgentService
-
-agent = AgentService.create_agent(
-    name="My Agent",
-    description="Does X",
-    agent_type="simple",
-    config={...}
-)
+@register_model("anthropic")
+def _anthropic(model_id, max_tokens, extra, **_):
+    from agno.models.anthropic import Claude
+    return Claude(id=model_id, max_tokens=max_tokens, **extra)
 ```
 
----
-
-## 🎯 **Next Steps**
-
-### Phase 1: Current State ✅
-- [x] Database models created
-- [x] Service layer implemented
-- [x] CRUD APIs ready
-- [x] Seeder script ready
-- [x] Sample configs provided
-
-### Phase 2: Enhancement (Recommended)
-1. **Add User Management**
-   - User authentication/JWT
-   - Agent ownership (created_by)
-   - User permissions
-
-2. **Add Agent Versioning**
-   - Track config changes
-   - Rollback capability
-   - Version comparison
-
-3. **Add Monitoring**
-   - Agent execution logs
-   - Performance metrics
-   - Error tracking
-
-4. **Add Marketplace Features**
-   - Agent discovery
-   - Ratings/reviews
-   - Popular agents ranking
-   - Agent sharing/collaboration
-
-5. **Add Advanced Orchestration**
-   - Complex workflows
-   - Conditional routing
-   - Task chaining
-   - Parallel execution
-
----
-
-## 🐛 **Testing Your Setup**
+**Change the schema**
 
 ```bash
-# 1. Seed database
-python seed_database.py
-
-# 2. Test API
-curl -X GET http://localhost:5000/api/agents
-curl -X GET http://localhost:5000/api/agents/1
-curl -X GET http://localhost:5000/api/agents/type/simple
-
-# 3. Create agent
-curl -X POST http://localhost:5000/api/agents \
-  -H  "Content-Type: application/json" \
-  -d '{"name":"Test","config":{},"agent_type":"simple"}'
-
-# 4. Execute agent
-curl -X POST http://localhost:5000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"Hello","agentIds":[1]}'
+# edit models/
+python -m alembic revision --autogenerate -m "what changed"
+# read the generated file — autogenerate mishandles NOT NULL defaults
+# and emits drop_constraint(None, ...) which cannot run
+python -m alembic upgrade head
 ```
 
----
-
-## 📚 **Code Organization Summary**
-
-| Layer | File | Purpose |
-|-------|------|---------|
-| **Data** | `models/agent.py` | Define DB schema |
-| **Data Access** | `services/database_service.py` | Query DB |
-| **Business Logic** | `services/agent_service.py` | Create/update agents |
-| **API Layer** | `controllers/agents_controller.py` | Handle requests |
-| **Routes** | `routes/routes.py` | Define endpoints |
-| **Config** | `agents/configs/*.json` | Agent definitions |
-
----
-
-## 🚨 **Important Notes**
-
-1. **Database Connection**: Ensure `DATABASE_URL` in `.env` is correct
-2. **Seeding**: Run `seed_database.py` first to populate initial agents
-3. **Agent Configs**: All agent configs are stored as JSONB in DB
-4. **No Hardcoding**: Never hardcode agent definitions - use DB
-5. **Error Handling**: All operations have proper error handling and logging
-
----
-
-**Your marketplace backend is now production-ready!** 🎉
+Test `downgrade` before trusting a migration. Both migrations in this repo had ordering bugs that only surfaced on the round trip.

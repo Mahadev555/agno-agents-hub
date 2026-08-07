@@ -1,377 +1,177 @@
-# Agno Hub - Frontend
+# Agno Hub — Frontend
 
-React TypeScript frontend for the Agno agent hub. Provides user interface for managing agents, viewing configurations, and interacting with agents through an intuitive chat playground.
+React single-page app for creating agents, composing teams, and running them with live streamed output.
 
-## Frontend Architecture
+For the project overview see the [root README](../README.md); for the API see the [backend README](../backend/README.md).
+
+> **JavaScript, not TypeScript.** Source files are `.jsx`. An earlier version of this document described a TypeScript app with a different file layout; that app does not exist.
+
+---
+
+## Layout
 
 ```
 frontend/
+├── index.html               Vite entry HTML
+├── vite.config.js           Dev server on :3000, /api proxy to :5000
+├── tailwind.config.js
+├── postcss.config.js
 ├── src/
+│   ├── main.jsx             React root
+│   ├── App.jsx              Auth gate + tab shell
+│   ├── index.css            Tailwind + shared classes
 │   ├── components/
-│   │   ├── AgentComponent.tsx      # Agent cards display
-│   │   ├── AgentDetailModal.tsx    # Agent details popup
-│   │   ├── ChatPlayground.tsx      # Chat interface
-│   │   ├── Header.tsx              # Navigation header
-│   │   └── MainLayout.tsx          # Main layout wrapper
-│   ├── services/
-│   │   └── api.ts                  # HTTP client & endpoints
-│   ├── theme/
-│   │   └── theme.ts                # Color & styling theme
-│   ├── App.tsx                     # Root component
-│   ├── App.css                     # App styles
-│   ├── index.tsx                   # Entry point
-│   ├── index.css                   # Global styles
-│   ├── App.test.tsx                # Tests
-│   └── setupTests.ts               # Test configuration
-├── public/
-│   ├── index.html                  # HTML template
-│   ├── manifest.json               # PWA manifest
-│   └── robots.txt                  # SEO config
-├── package.json                    # Dependencies
-├── tsconfig.json                   # TypeScript config
-└── README.md                       # This file
+│   │   ├── Login.jsx        Sign in / register
+│   │   ├── Header.jsx       Top bar, account menu, sign out
+│   │   ├── Sidebar.jsx      Navigation + create-agent modal
+│   │   ├── Dashboard.jsx    Counts and overview
+│   │   ├── AgentComponent.jsx  Agent cards
+│   │   ├── ChatPlayground.jsx  Run agents/teams with streamed output
+│   │   ├── Settings.jsx
+│   │   ├── Button.jsx
+│   │   └── index.js
+│   ├── hooks/
+│   │   ├── useMediaQuery.js
+│   │   └── index.js
+│   └── services/
+│       └── api.js           HTTP client, auth, SSE
+└── public/
 ```
 
-## Technology Stack
+---
 
-- **React** (18+) - UI library
-- **TypeScript** - Type safety
-- **CSS** - Component styling
-- **Axios** - HTTP client for API calls
-- **Node.js** 16+ - Runtime
-- **npm** 8+ - Package manager
-
-## Setup & Installation
-
-### Prerequisites
-```bash
-Node.js 16+
-npm 8+
-Backend running on http://localhost:5000
-```
-
-### Installation
+## Setup
 
 ```bash
-cd frontend
 npm install
+npm run dev        # http://localhost:3000
 ```
 
-### Environment Configuration
+The backend must be running on `http://localhost:5000`.
 
-Create `.env` file in `frontend/` directory:
+| Script | Does |
+|---|---|
+| `npm run dev` | Vite dev server with HMR |
+| `npm run build` | Production build to `dist/` |
+| `npm run preview` | Serve the built output |
+| `npm run lint` | ESLint over `src` |
+
+### Configuration
+
+`.env`:
 
 ```env
-REACT_APP_API_URL=http://localhost:5000
+VITE_API_URL=http://localhost:5000
 ```
 
-## Development
+Because this is an absolute URL, requests go **directly** to the API and bypass the Vite proxy — so they are cross-origin and CORS applies. The backend must list this app's origin in `CORS_ALLOW_ORIGINS`; `http://localhost:3000` is included by default.
 
-### Start Development Server
+Leave `VITE_API_URL` unset to use the `/api` proxy in `vite.config.js` instead, which makes requests same-origin.
 
-```bash
-npm start
-```
+---
 
-Opens at: **http://localhost:3000**
+## Authentication
 
-The app will automatically reload on code changes.
-
-### Build for Production
-
-```bash
-npm run build
-```
-
-Creates optimized production build in `build/` directory.
-
-### Run Tests
-
-```bash
-npm test
-```
-
-## Components
-
-### AgentComponent
-**File:** `src/components/AgentComponent.tsx`
-
-Core component that displays:
-- Agent name and description
-- Agent type badge (Simple/MCP)
-- Active status indicator
-- Agent ID reference
-
-### AgentDetailModal
-**File:** `src/components/AgentDetailModal.tsx`
-
-Modal that shows:
-- Complete agent configuration
-- Model settings (model ID, max tokens)
-- System instructions
-- Tool configurations
-- MCP settings (if MCP agent)
-
-### ChatPlayground
-**File:** `src/components/ChatPlayground.tsx`
-
-Interactive interface with:
-- Agent selection dropdown
-- Message input field
-- Conversation history display
-- Real-time message streaming
-- Error handling & display
-
-### Header
-**File:** `src/components/Header.tsx`
-
-Navigation with:
-- Hub title/branding
-- Navigation links
-- Active section indicator
-
-### MainLayout
-**File:** `src/components/MainLayout.tsx`
-
-Page wrapper providing:
-- Header inclusion
-- Responsive layout
-- Content area management
-
-## API Client
-
-**Location:** `src/services/api.ts`
-
-### Exported Functions
-
-```typescript
-// Agent endpoints
-getAllAgents()                          // GET /api/agents
-getAgentById(id: string)                // GET /api/agents/{id}
-getAgentByName(name: string)            // GET /api/agents/name/{name}
-getActiveAgents()                       // GET /api/agents/active
-getAgentsByType(type: string)           // GET /api/agents/type/{type}
-
-// Host agent endpoints
-getAllHostAgents()                      // GET /api/host-agents
-getHostAgentById(id: string)            // GET /api/host-agents/{id}
-
-// Execution endpoints
-executeAgent(prompt: string, agentId: string) // POST /api/chat
-```
-
-### Usage Example
-
-```typescript
-import { getAllAgents, executeAgent } from '../services/api';
-
-// Get all agents
-const agents = await getAllAgents();
-
-// Execute agent task
-const response = await executeAgent('Tell me about AI', agent.agent_id);
-```
-
-## Theme
-
-**Location:** `src/theme/theme.ts`
-
-Configures:
-- Color palette (primary, secondary, background)
-- Typography settings
-- Responsive breakpoints
-- Component styling variables
-
-## State Management
-
-### Local State
-Each component manages its own state:
-- Agent list state
-- Selected agent
-- Chat messages
-- Loading/error states
-
-### API Communication
-Uses Axios with error handling:
-- Request interceptors for headers
-- Response error handling
-- Timeout configuration
-
-## Styling
-
-- **App.css** - Main application styles
-- **index.css** - Global base styles
-- **Component CSS** - Individual component styles
-- **theme.ts** - Theme variables
-
-## Browser Support
-
-- Chrome/Edge (latest)
-- Firefox (latest)
-- Safari (latest)
-
-## Troubleshooting
-
-### API Connection Error
-
-**Problem:** Can't connect to backend
-
-**Solution:**
-- Verify backend is running on `http://localhost:5000`
-- Check `REACT_APP_API_URL` in `.env` file
-- Check browser console for specific error
-- Verify CORS is enabled in backend
-
-### Module Not Found Error
-
-**Problem:** `Module not found` error
-
-**Solution:**
-```bash
-rm -rf node_modules package-lock.json
-npm install
-npm start
-```
-
-### Port 3000 Already in Use
-
-**Problem:** Port 3000 is already in use
-
-**Solution:**
-```bash
-# On Windows PowerShell:
-Get-Process -Id (Get-NetTCPConnection -LocalPort 3000).OwningProcess | Stop-Process
-
-# On Linux/Mac:
-lsof -i :3000 # Find process
-kill -9 <PID> # Kill it
-
-# Or use different port:
-PORT=3001 npm start
-```
-
-### Build Fails
-
-**Problem:** `npm run build` fails
-
-**Solution:**
-```bash
-npm cache clean --force
-rm -rf node_modules
-npm install
-npm run build
-```
-
-## Features
-
-✓ **TypeScript** - Full type safety  
-✓ **Responsive Design** - Mobile & desktop support  
-✓ **Agent Management** - View all available agents  
-✓ **Agent Details** - Inspect full agent configuration  
-✓ **Chat Interface** - Interact with agents  
-✓ **Error Handling** - User-friendly error messages  
-✓ **Real-time Updates** - Instant message display  
-
-## Performance Tips
-
-1. **Lazy Load Components**
-   ```typescript
-   const ChatPlayground = React.lazy(() => import('./ChatPlayground'));
-   ```
-
-2. **Memoize Components**
-   ```typescript
-   export default React.memo(AgentComponent);
-   ```
-
-3. **Optimize Re-renders**
-   - Use `useCallback` for event handlers
-   - Use `useMemo` for expensive computations
-
-## Development Workflow
-
-1. Start backend on port 5000
-2. Run `npm install` in frontend
-3. Start frontend with `npm start`
-4. Frontend opens at http://localhost:3000
-5. Make changes - auto reload on save
-6. Check console for errors/warnings
-7. Build for production: `npm run build`
-
-## Documentation Links
-
-- [Main Hub README](../README.md) - Project overview
-- [Backend README](../backend/README.md) - Backend setup & APIs
-- [React Docs](https://react.dev)
-- [TypeScript Docs](https://www.typescriptlang.org)
-- [Axios Docs](https://axios-http.com)
-
-## File Structure Guide
+Every API endpoint except `/health` and `/api/auth/*` requires a bearer token, so `App.jsx` gates the whole UI:
 
 ```
-src/
-├── App.tsx                    # Root component
-├── App.css                    # App styles
-├── index.tsx                  # ReactDOM entry
-├── index.css                  # Global styles
-├── components/                # React components folder
-├── services/                  # API client & utilities
-└── theme/                     # Theming configuration
+App mounts
+  -> token in localStorage?  no  -> <Login />
+                             yes -> GET /api/auth/me
+                                      ok   -> render the app
+                                      401  -> clear token, <Login />
 ```
 
-## Environment Variables
+`services/api.js` owns the mechanics:
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| REACT_APP_API_URL | http://localhost:5000 | Backend API endpoint |
-| NODE_ENV | development | Environment (development/production) |
+- **`tokenStore`** — reads/writes `agnohub.token` in `localStorage`
+- **request interceptor** — attaches `Authorization: Bearer <token>` to everything
+- **response interceptor** — on `401`, clears the token and notifies the app so it drops to the login screen instead of rendering empty lists
+- **`setUnauthenticatedHandler`** — how `App.jsx` subscribes to that
 
-## Building & Deployment
+The first account registered on a fresh deployment becomes an **administrator**.
 
-### Development Build
-```bash
-npm start
+> The token is in `localStorage`, which any script on the page can read — it is only as safe as the app's XSS posture. `httpOnly` cookies would be stronger but need CSRF handling and a same-site deployment.
+
+---
+
+## Running agents
+
+`ChatPlayground.jsx` uses the streaming API. Both single-agent and team modes go through one path:
+
+```js
+const run = await runService.start(prompt, { agentIds, hostAgentId })
+
+runService.stream(run.run_id, {
+  onEvent: (e) => { if (e.type === 'token') append(e.text) },
+  onDone:  (e) => finalize(e.output),
+  onError: (err) => showError(err.message),
+})
 ```
 
-### Production Build
-```bash
-npm run build
+`POST /api/runs` returns immediately and the server keeps working regardless of what this client does; tokens then arrive over SSE and render into a placeholder message as they come.
+
+Two details that matter:
+
+**`EventSource` cannot set headers**, so the token goes in the query string (`?access_token=`). The backend accepts either.
+
+**The stream is closed explicitly** on a terminal event. `EventSource` reconnects automatically when a server closes a stream, which would replay the entire run.
+
+### Error handling
+
+The API returns FastAPI error bodies where `detail` is a string for raised errors and an **array of objects** for `422` validation failures. `extractErrorMessage` flattens both:
+
+```
+404 -> "Agent IDs not found: [999]"
+502 -> "Could not connect to an MCP server ... Check that the MCP endpoint is running."
+422 -> "prompt: String should have at least 1 character"
+429 -> "Run limit reached: 60 runs per hour. Try again later."
 ```
 
-Built files go to `build/` directory.
+Rendering the raw `422` array would crash React on an object child.
 
-### Deploy to Server
+A `200` response can also carry `status: "error"` when a run failed partway; `unwrapExecution` turns that into a thrown error rather than an empty reply.
 
-1. Build: `npm run build`
-2. Copy `build/` contents to web server
-3. Ensure API_URL points to backend
-4. Serve with static file server
+### Timeouts
 
-## Common Issues & Solutions
+| Call type | Timeout | Why |
+|---|---|---|
+| CRUD | 15s | Should be fast; fail early |
+| Execution | 300s | A team run is several sequential LLM calls |
 
-| Issue | Cause | Solution |
-|-------|-------|----------|
-| API 404 | Backend not running | Start backend on port 5000 |
-| CORS error | Backend CORS not configured | Check backend CORS settings |
-| Module not found | Dependencies not installed | Run `npm install` |
-| Port in use | Port 3000 already used | Use `PORT=3001 npm start` |
-| Blank page | Build issues | Clear cache, reinstall deps |
+A single 30s timeout used to abort real team runs client-side while the backend kept spending tokens.
 
-## Future Enhancements
+---
 
-- [ ] Agent creation UI
-- [ ] Agent editing interface
-- [ ] File upload support
-- [ ] Chat history persistence
-- [ ] Dark mode theme
-- [ ] Multi-language support
-- [ ] Accessibility improvements
+## API client
 
-## Support & Debugging
+`services/api.js` exports three services.
 
-1. Check browser console (F12) for errors
-2. Check network tab for API requests
-3. Verify backend is running
-4. Check .env file configuration
-5. Review browser compatibility
-6. Check firewall/proxy settings
+**`authService`** — `register`, `login`, `me`, `logout`, `hasToken`
+
+**`agentService`** — `getAgents`, `getHostAgents`, `getAgentById`, `createAgent`, and the blocking `executeSingleAgent` / `executeTeam` / `sendMessage`
+
+**`runService`** — `start`, `get`, `list`, `stream`
+
+Prefer `runService` for execution. The `agentService.execute*` methods hold the connection open for the whole run and give no progress.
+
+Responses identify agents by **`agent_id`** (FastAPI serialises by alias), and teams by `team_id`.
+
+---
+
+## Not yet wired
+
+The backend supports these; the UI does not use them yet:
+
+- **Teams** — `/api/teams` CRUD and `POST /api/teams/{id}/runs`. The playground still composes teams ad hoc each run instead of saving them.
+- **Run history** — `GET /api/runs` returns the signed-in user's past runs with output, token usage, and duration.
+- **Agent editing** — `PUT` and `DELETE /api/agents/{id}` have no UI.
+- **Public agents** — `is_public` can be set on create but is not surfaced or filterable.
+
+---
+
+## Stack
+
+React 19 · Vite 5 · Tailwind CSS 3 · Framer Motion · lucide-react · react-markdown · Axios
+
+There are no tests. `npm run lint` is the only automated check.
