@@ -8,8 +8,6 @@ import logging
 from typing import List, Dict, Optional, Any
 from services.database_service import DatabaseService
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

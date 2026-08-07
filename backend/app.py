@@ -4,26 +4,43 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from routes.routes import router
 from connection import init_db
+from config import get_settings
+from logging_config import configure_logging
+from services.run_service import RunService
+import logging
 import os
 from contextlib import asynccontextmanager
 
-# Create client build directory path
-client_build_dir = os.path.join("backend", "static")
+# Resolve relative to this file, not the process working directory, so the SPA
+# is found whether the server is started from the repo root or from backend/.
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+client_build_dir = os.path.join(BACKEND_DIR, "static")
+
+# Settings are validated once at import; a bad value fails here rather than at
+# the moment it is first needed.
+settings = get_settings()
+ALLOWED_ORIGINS = settings.cors_origins
+ALLOW_CREDENTIALS = settings.allow_credentials
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: anything that needs to happen before the app starts
-    print("=" * 60)
-    print("Starting agno_hub Hub API...")
-    print("=" * 60)
-    print("Initializing database...")
+    configure_logging()
+    log = logging.getLogger("agno_hub")
+
+    log.info(f"Starting agno_hub Hub API (env={settings.environment})...")
+    # Fail fast in production rather than issuing tokens signed with an
+    # ephemeral key that changes on every deploy.
+    settings.resolved_jwt_secret()
     try:
         init_db()
-        print("[OK] API ready for requests")
+        # Runs execute in-process, so anything left mid-flight by a previous
+        # process can never finish. Close them out rather than leaving them
+        # stuck in `running` forever.
+        RunService.reap_orphans()
+        log.info("API ready for requests")
     except Exception as e:
-        print(f"[WARNING] Database initialization warning: {e}")
-        print("The API will run, but database operations may fail")
-    print("=" * 60)
+        log.warning(f"Database initialization failed: {e}")
+        log.warning("The API will run, but database operations may fail")
     yield
     # Shutdown: anything that needs to happen before the app stops
     print("=" * 60)
@@ -39,11 +56,17 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health():
+    """Liveness probe that does not touch the database."""
+    return {"status": "ok"}
 
 # Include API routes
 app.include_router(router)

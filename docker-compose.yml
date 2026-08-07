@@ -1,0 +1,50 @@
+# Local container run. The application image builds the React app and serves it
+# from the API, so this is a single service plus an optional local database.
+#
+#   docker compose up --build
+#
+# Point DATABASE_URL at your managed Postgres (Neon) and the `db` service is not
+# needed; it is here so the stack can run without external dependencies.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      # Override in a .env file next to this compose file.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://agno:agno@db:5432/agno}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?GOOGLE_API_KEY must be set}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set - generate with python -c "import secrets; print(secrets.token_urlsafe(48))"}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5000}
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      RUN_RATE_LIMIT_PER_HOUR: ${RUN_RATE_LIMIT_PER_HOUR:-60}
+      WEB_CONCURRENCY: 1
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: agno
+      POSTGRES_PASSWORD: agno
+      POSTGRES_DB: agno
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The API runs migrations on start, so wait until Postgres actually
+      # accepts connections rather than just having a running container.
+      test: ["CMD-SHELL", "pg_isready -U agno -d agno"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

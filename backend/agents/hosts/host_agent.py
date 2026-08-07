@@ -1,145 +1,174 @@
-import asyncio  
-import os  
+"""
+Factory for turning stored agent configurations into live Agno objects.
+
+This module owns the config -> Agno translation only. It does not touch the
+database and it does not manage execution lifecycle; see agents/subhost/agent.py.
+"""
+
 import json
-from datetime import datetime
-from typing import List, Dict, Any, Optional, Union  
-from agno.agent import Agent  
-from agno.models.azure import AzureOpenAI  
-from agno.models.openai import OpenAIChat  
-from agno.team import Team  
-from agno.tools.mcp import MCPTools  
-from agno.tools.duckduckgo import DuckDuckGoTools  
-from dotenv import load_dotenv  
-from agno.models.google import Gemini
+from typing import Any, Dict, List, Optional
 
-load_dotenv()  
-async def create_dynamic_team_with_mcp(  
-    team_config: Dict[str, Any],  
-    agent_configs: List[Dict[str, Any]]  
-) -> Team:  
-    """  
-    Create a team with dynamically generated agents supporting both MCP and simple agents.  
-      
-    Args:  
-        team_config: Configuration for the team (name, mode, model, etc.)  
-        agent_configs: Agent configurations - can be dict from DB or list format  
-      
-    Returns:  
-        Team instance with dynamically created agents  
-    """  
-    agents = []  
-    mcp_tools_instances = []  # Keep track of MCP tools for proper cleanup  
-      
-    for agent_config in agent_configs:  
-        is_mcp = agent_config.get("is_mcp", False)  
-          
-        if is_mcp:  
-            # Create MCP agent similar to your HR agent example  
-            agent = await _create_mcp_agent(agent_config, mcp_tools_instances)  
-        else:  
-            # Create simple agent with regular tools  
-            agent = _create_simple_agent(agent_config)  
-          
-        agents.append(agent)  
-        
-    print(f":::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::==>> agents: {agents}")
-      
-    # Create team with dynamic agents  
-    team = Team(  
-        name=team_config.get("name", "Dynamic Team"),  
-        mode=team_config.get("mode", "coordinate"),  
-        model=_get_model_from_config(team_config.get("model_config", {})),  
-        members=agents,  
-        instructions=team_config.get("instructions", ""),  
-        **team_config.get("additional_params", {})  
-    )  
-      
-    return team
+from agno.agent import Agent
+from agno.team import Team
+from agno.tools.mcp import MCPTools
+from agno.utils.log import logger
+from dotenv import load_dotenv
 
-  
-async def _create_mcp_agent(agent_config: Dict[str, Any], mcp_tools_instances: List) -> Agent:  
-    """Create an MCP agent using the pattern from your HR agent example."""  
-    # Convert string config to dict if needed
-    if isinstance(agent_config, str):
+from runtime.mcp_guard import MCPEndpointBlocked, validate_mcp_url
+from runtime.registry import build_model, build_tools
+
+load_dotenv()
+
+# Agno only accepts these three; anything else silently disables delegation.
+VALID_TEAM_MODES = ("route", "coordinate", "collaborate")
+DEFAULT_TEAM_MODE = "coordinate"
+
+DEFAULT_MODEL_ID = "gemini-2.5-flash-lite"
+
+
+class AgentBuildError(Exception):
+    """Raised when a stored configuration cannot be turned into an Agno object."""
+
+
+def _as_dict(config: Any, label: str) -> Dict[str, Any]:
+    """Accept either a dict or a JSON string, and fail loudly on anything else."""
+    if isinstance(config, dict):
+        return config
+    if isinstance(config, str):
         try:
-            agent_config = json.loads(agent_config)
-        except json.JSONDecodeError:
-            raise ValueError("agent_config is not valid JSON")
-    
-    mcp_config = agent_config.get("mcp_config", {})  
-      
-    mcp_tools = MCPTools(  
-        url=mcp_config.get("url", "http://localhost:3001/sse"),  
-        transport=mcp_config.get("transport", "sse"),
-        timeout_seconds=300,
-        **mcp_config.get("additional_params", {})  
+            return json.loads(config)
+        except json.JSONDecodeError as exc:
+            raise AgentBuildError(f"{label} is not valid JSON: {exc}") from exc
+    raise AgentBuildError(f"{label} must be a dict or JSON string, got {type(config).__name__}")
+
+
+def _inner_config(agent_row: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Pull the nested `config` blob out of a database row.
+
+    Rows are stored as {name, description, kind, mcp_config, config: {...}}.
+    Older/hand-seeded rows sometimes flatten everything to the top level, so fall
+    back to the row itself rather than raising a KeyError at execution time.
+    """
+    agent_row = _as_dict(agent_row, "agent_config")
+    inner = agent_row.get("config")
+    if not inner:
+        return agent_row
+    return _as_dict(inner, "agent_config['config']")
+
+
+async def create_dynamic_team_with_mcp(
+    team_config: Dict[str, Any],
+    agent_configs: List[Dict[str, Any]],
+) -> Team:
+    """
+    Create a Team from a host-agent config and a list of member agent rows.
+
+    Args:
+        team_config: The host agent's `config` blob (name, mode, model_config, ...)
+        agent_configs: Member agent rows as stored in the database
+
+    Returns:
+        A Team whose members were built from the supplied configs.
+    """
+    if not agent_configs:
+        raise AgentBuildError("Cannot create a team with no member agents")
+
+    team_config = _as_dict(team_config, "team_config")
+    agents = [build_agent(agent_config) for agent_config in agent_configs]
+
+    mode = team_config.get("mode", DEFAULT_TEAM_MODE)
+    if mode not in VALID_TEAM_MODES:
+        logger.warning(
+            f"Team mode '{mode}' is not one of {VALID_TEAM_MODES}; "
+            f"falling back to '{DEFAULT_TEAM_MODE}'. "
+            "An invalid mode disables task delegation entirely."
+        )
+        mode = DEFAULT_TEAM_MODE
+
+    logger.info(f"Building team '{team_config.get('name', 'Dynamic Team')}' "
+                f"(mode={mode}, members={[a.name for a in agents]})")
+
+    return Team(
+        name=team_config.get("name", "Dynamic Team"),
+        mode=mode,
+        model=build_model(_model_settings(team_config)),
+        members=agents,
+        instructions=team_config.get("instructions", ""),
+        **team_config.get("additional_params", {}),
     )
-    
-    # Store the tools instance for cleanup later
-    mcp_tools_instances.append(mcp_tools)
 
-    agent_final_config = agent_config['config']
 
-    model_config = agent_final_config['model_config']
+def build_agent(agent_row: Dict[str, Any]) -> Agent:
+    """Build a single Agno Agent from a database row, MCP or simple."""
+    agent_row = _as_dict(agent_row, "agent_config")
+    is_mcp = agent_row.get("kind") == "mcp" or agent_row.get("is_mcp", False)
+    try:
+        if is_mcp:
+            return _create_mcp_agent(agent_row)
+        return _create_simple_agent(agent_row)
+    except ValueError as exc:
+        # Registry rejections (unknown tool or model provider) are config
+        # problems, so surface them as build errors rather than 500s.
+        raise AgentBuildError(str(exc)) from exc
 
-    agent = Agent(  
-        name=agent_final_config.get("name", "MCP Agent"),  
-        model=_get_model_from_config(model_config),  
-        tools=[mcp_tools],  
-        description=agent_final_config.get("description", "MCP-enabled agent"),  
-        instructions=agent_final_config.get("instructions", ""),  
-        markdown=agent_final_config.get("markdown", True),  
-        show_tool_calls=agent_final_config.get("show_tool_calls", True),  
-        **agent_final_config.get("additional_params", {})  
-    )  
-    
-    return agent  
-  
-def _create_simple_agent(agent_config: Dict[str, Any]) -> Agent:  
-    """Create a simple agent with regular tools."""  
-    # Convert string config to dict if needed
-    if isinstance(agent_config, str):
-        try:
-            agent_config = json.loads(agent_config)
-        except json.JSONDecodeError:
-            raise ValueError("agent_config is not valid JSON")
-    model_config = agent_config.get("model_config", {})
-    agent_final_config = agent_config['config']
 
-    model_config = agent_final_config['model_config']
-    agent = Agent(  
-        name=agent_final_config.get("name", "Simple Agent"),  
-        role=agent_final_config.get("role", "Assistant"),  
-        model=_get_model_from_config(model_config),  
-        tools=_get_tools_from_config(agent_final_config.get("tools", [])),  
-        instructions=agent_final_config.get("instructions", ""),  
-        **agent_final_config.get("additional_params", {})  
-    )  
-    return agent
-  
-def _get_model_from_config(model_config: Dict[str, Any]):  
-    """Create model instance from configuration.
-    
-    Uses gemini-2.5-flash-lite as default for all agents unless explicitly configured otherwise.
-    """  
-    model_type = model_config.get("type", "google")  
-    model_id = model_config.get("id", "gemini-2.5-flash-lite")
-      
-    if model_type == "azure":  
-        return AzureOpenAI(  
-            id=model_id if model_id.startswith("gpt") else "gpt-4o",  
-            max_tokens=model_config.get("max_tokens", 16384),  
-            api_version=model_config.get("api_version") or os.getenv("AZURE_OPENAI_API_VERSION"),  
-            **model_config.get("additional_params", {})  
-        )  
-    else:
-        # Default to gemini-2.5-flash-lite for all Google models
-        return Gemini(id=model_id)
-  
-def _get_tools_from_config(tool_names: List[str]) -> List:  
-    """Map tool names to actual tool instances for simple agents."""  
-    tool_mapping = {  
-        "duckduckgo": DuckDuckGoTools()
-    }  
-    return [tool_mapping[name] for name in tool_names if name in tool_mapping]
+def _create_mcp_agent(agent_row: Dict[str, Any]) -> Agent:
+    """
+    Create an MCP-backed agent.
 
+    The MCPTools instance is returned un-entered; the caller is responsible for
+    entering it into an AsyncExitStack on the same event loop that will run the
+    agent. See agents/subhost/agent.py.
+    """
+    mcp_config = agent_row.get("mcp_config") or {}
+    inner = _inner_config(agent_row)
+
+    # The URL is user-supplied and the server connects to it, so it is checked
+    # against the egress policy before any connection is attempted.
+    url = mcp_config.get("url", "http://localhost:3001/sse")
+    try:
+        validate_mcp_url(url)
+    except MCPEndpointBlocked as exc:
+        raise AgentBuildError(str(exc)) from exc
+
+    mcp_tools = MCPTools(
+        url=url,
+        transport=mcp_config.get("transport", "sse"),
+        timeout_seconds=mcp_config.get("timeout_seconds", 300),
+        **mcp_config.get("additional_params", {}),
+    )
+
+    return Agent(
+        name=inner.get("name", agent_row.get("name", "MCP Agent")),
+        role=inner.get("role", "Assistant"),
+        model=build_model(_model_settings(inner)),
+        tools=[mcp_tools],
+        description=inner.get("description", "MCP-enabled agent"),
+        instructions=inner.get("instructions", ""),
+        markdown=inner.get("markdown", True),
+        show_tool_calls=inner.get("show_tool_calls", True),
+        **inner.get("additional_params", {}),
+    )
+
+
+def _create_simple_agent(agent_row: Dict[str, Any]) -> Agent:
+    """Create an agent backed by the built-in tool registry."""
+    inner = _inner_config(agent_row)
+
+    return Agent(
+        name=inner.get("name", agent_row.get("name", "Simple Agent")),
+        role=inner.get("role", "Assistant"),
+        model=build_model(_model_settings(inner)),
+        tools=build_tools(inner.get("tools", [])),
+        description=inner.get("description", ""),
+        instructions=inner.get("instructions", ""),
+        markdown=inner.get("markdown", True),
+        show_tool_calls=inner.get("show_tool_calls", True),
+        **inner.get("additional_params", {}),
+    )
+
+
+def _model_settings(blob: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the LLM section, accepting the legacy `model_config` key."""
+    return blob.get("model") or blob.get("model_config") or {}

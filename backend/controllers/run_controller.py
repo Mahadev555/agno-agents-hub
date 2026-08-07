@@ -1,0 +1,212 @@
+"""
+Run Controller
+
+Owns the lifecycle of a run: create the record, execute in the background,
+publish events to subscribers, and write the terminal state.
+
+Execution is deliberately decoupled from the HTTP request that started it, so a
+client disconnect (closed tab, dropped wifi, proxy timeout) no longer aborts a
+run halfway through and loses the work.
+"""
+
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
+
+from fastapi import HTTPException
+
+from agents.subhost.agent import stream_agent_task
+from controllers.agent_execution_controller import AgentExecutionController
+from controllers.team_controller import TeamsController
+from dependencies import can_read
+from models.run import RunStatus
+from services import rate_limit
+from services.run_bus import run_bus
+from services.run_service import RunService
+
+logger = logging.getLogger(__name__)
+
+# Strong references to in-flight tasks. asyncio only holds weak references, so
+# without this a run can be garbage collected mid-execution.
+_active_tasks: set = set()
+
+
+class RunController:
+    """Create and drive runs."""
+
+    @staticmethod
+    def start(
+        prompt: str,
+        user: Dict[str, Any],
+        agent_ids: Optional[List[int]] = None,
+        host_agent_id: Optional[int] = None,
+        team_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Validate the request, persist a pending run, and schedule execution.
+
+        Composition comes from a saved team when team_id is given, otherwise
+        from the ad-hoc agent_ids/host_agent_id pair.
+
+        Returns immediately with the run record; the caller subscribes to
+        /api/runs/{run_id}/events for progress.
+        """
+        prompt = (prompt or "").strip()
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Prompt cannot be empty")
+
+        user_id = user["user_id"]
+
+        # Limits are checked before any work is scheduled, so an over-quota
+        # request costs nothing.
+        try:
+            rate_limit.enforce(user_id)
+        except rate_limit.RateLimitExceeded as exc:
+            raise HTTPException(
+                status_code=429,
+                detail=str(exc),
+                headers={"Retry-After": str(exc.retry_after)},
+            )
+
+        # Resolve configs up front so a bad agent id is a synchronous 404
+        # instead of an error the client only discovers over the event stream.
+        if team_id is not None:
+            resolved = TeamsController.resolve_for_run(team_id, user)
+            agents = resolved["agents"]
+            host_agent_id = resolved["host_agent_id"]
+            host_config = resolved["host_config"]
+            mode = "team"
+        else:
+            agents = AgentExecutionController._load_agents(agent_ids)
+
+            # Running an agent requires read access to it; without this a user
+            # could execute someone else's private agent by guessing its id.
+            hidden = [a["agent_id"] for a in agents if not can_read(a, user)]
+            if hidden:
+                raise HTTPException(
+                    status_code=404, detail=f"Agent IDs not found: {hidden}"
+                )
+
+            mode = "single" if (len(agents) == 1 and host_agent_id is None) else "team"
+
+            host_config = None
+            if mode == "team":
+                if host_agent_id is None:
+                    host_agent = AgentExecutionController._default_host_agent()
+                    host_agent_id = host_agent["agent_id"]
+                host_agent = AgentExecutionController._load_agents([host_agent_id])[0]
+                if not can_read(host_agent, user):
+                    raise HTTPException(
+                        status_code=404, detail=f"Host agent {host_agent_id} not found"
+                    )
+                host_config = AgentExecutionController._load_host_config(host_agent_id)
+
+        record = RunService.create(
+            prompt=prompt,
+            mode=mode,
+            agent_ids=[a["agent_id"] for a in agents],
+            host_agent_id=host_agent_id if mode == "team" else None,
+            owner_id=user_id,
+        )
+        run_id = record["run_id"]
+
+        # Open the channel before scheduling so a fast subscriber cannot miss
+        # the beginning of the stream.
+        run_bus.open(run_id)
+
+        rate_limit.acquire(user_id)
+        task = asyncio.create_task(
+            RunController._execute(
+                run_id=run_id,
+                prompt=prompt,
+                agent_configs=agents,
+                host_config=host_config,
+                execution_mode=mode,
+                user_id=user_id,
+            )
+        )
+        _active_tasks.add(task)
+        task.add_done_callback(_active_tasks.discard)
+
+        return record
+
+    @staticmethod
+    async def _execute(
+        run_id: str,
+        prompt: str,
+        agent_configs: List[Dict[str, Any]],
+        host_config: Optional[Dict[str, Any]],
+        execution_mode: str,
+        user_id: int,
+    ) -> None:
+        """Drive the run to a terminal state, publishing events as it goes."""
+        channel = run_bus.open(run_id)
+        RunService.mark_running(run_id)
+
+        output = ""
+        error: Optional[str] = None
+        usage: Optional[Dict[str, Any]] = None
+
+        try:
+            async for event in stream_agent_task(
+                prompt=prompt,
+                agent_configs=agent_configs,
+                host_config=host_config,
+                execution_mode=execution_mode,
+                session_id=run_id,
+            ):
+                channel.publish(event)
+
+                if event["type"] == "completed":
+                    output = event.get("output", "")
+                    usage = event.get("usage")
+                elif event["type"] == "error":
+                    error = event.get("message", "Unknown error")
+
+        except asyncio.CancelledError:
+            error = "Run was cancelled"
+            channel.publish({"type": "error", "message": error})
+            raise
+        except Exception as exc:
+            # The generator handles its own failures; this is a last resort so a
+            # run can never be left stuck in `running`.
+            error = f"Unexpected error: {exc}"
+            logger.error(f"[{run_id}] {error}", exc_info=True)
+            channel.publish({"type": "error", "message": error})
+        finally:
+            status = RunStatus.ERROR if error else RunStatus.COMPLETED
+            RunService.finish(
+                run_id=run_id,
+                status=status,
+                output=output or None,
+                error=error,
+                usage=usage,
+            )
+            channel.close()
+            rate_limit.release(user_id)
+
+    @staticmethod
+    def get(run_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fetch a run record.
+
+        Runs are private to the account that started them; another user's run
+        is reported as missing rather than forbidden.
+        """
+        record = RunService.get(run_id)
+        if not record:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        owner_id = record.get("owner_id")
+        if not user.get("is_admin") and owner_id is not None and owner_id != user["user_id"]:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        return record
+
+    @staticmethod
+    def list_recent(
+        user: Dict[str, Any], limit: int = 50, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List the caller's recent runs, newest first."""
+        owner_id = None if user.get("is_admin") else user["user_id"]
+        return RunService.list_recent(limit=limit, status=status, owner_id=owner_id)

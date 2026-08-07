@@ -1,311 +1,364 @@
-import asyncio
-import json
-import os
-import sys
+"""
+Async execution runtime for agents and teams.
+
+Two execution paths:
+
+  single -> build one Agent and await agent.arun(prompt)
+  team   -> build a Team from a host agent config and await team.arun(prompt)
+
+Everything is async end-to-end on the caller's event loop. MCP tool sessions are
+entered into an AsyncExitStack inside the same coroutine that runs the agent, so
+sessions are always created and closed on the loop that uses them.
+
+Callers pass already-loaded configuration dicts; this module does not query the
+database.
+"""
+
+import uuid
 from contextlib import AsyncExitStack
-from typing import AsyncIterator, Dict, Any, Iterator
+from typing import Any, AsyncIterator, Dict, List, Optional
+
+from agno.agent import Agent
+from agno.team import Team
 from agno.tools.mcp import MCPTools
-from agno.agent import RunResponse, RunEvent
-from agno.workflow import Workflow
-from agno.storage.sqlite import SqliteStorage
 from agno.utils.log import logger
 
-# Add the project root to the Python path
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+from agents.hosts.host_agent import (
+    AgentBuildError,
+    build_agent,
+    create_dynamic_team_with_mcp,
+)
 
-from agents.hosts.host_agent import create_dynamic_team_with_mcp
-from models.agents_model import get_all_agent_configs, get_host_agent_config_by_name
+
+class AgentExecutionError(Exception):
+    """Raised when a task cannot be set up or executed."""
 
 
-class AgentWorkflow(Workflow):
-    """Workflow for running dynamic agent teams"""
-    
-    def __init__(self, session_id: str = None, storage=None):
-        """Initialize the workflow"""
-        super().__init__(
-            session_id=session_id or f"agent-session-{hash(str(asyncio.get_event_loop()))}",
-            storage=storage or SqliteStorage(
-                table_name="agent_workflows",
-                db_file="tmp/agent_workflows.db",
-            )
+class MCPConnectionError(AgentExecutionError):
+    """Raised when an agent's configured MCP server is unreachable."""
+
+
+async def _register_mcp_sessions(stack: AsyncExitStack, agents: List[Agent]) -> None:
+    """Enter every MCPTools instance on the current event loop."""
+    for agent in agents:
+        for tool in getattr(agent, "tools", None) or []:
+            if isinstance(tool, MCPTools):
+                logger.info(f"Opening MCP session for agent '{agent.name}'")
+                await stack.enter_async_context(tool)
+
+
+def _describe_exception(exc: BaseException) -> str:
+    """
+    Flatten an exception into a readable message.
+
+    anyio task groups (used by the MCP client) wrap real failures in an
+    ExceptionGroup, whose own str() is the useless "unhandled errors in a
+    TaskGroup (1 sub-exception)". Unwrap so the caller sees the actual cause.
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        return "; ".join(_describe_exception(sub) for sub in exc.exceptions)
+    cause = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+    return cause
+
+
+async def _build_runnable(
+    prompt: str,
+    agent_configs: List[Dict[str, Any]],
+    host_config: Optional[Dict[str, Any]],
+    execution_mode: str,
+    session_id: str,
+):
+    """
+    Validate the request and construct the Agent or Team that will run it.
+
+    Shared by the streaming and non-streaming paths so the two cannot drift
+    apart in how they interpret a configuration.
+
+    Returns:
+        (runnable, members) where runnable is an Agent or Team and members is
+        the list of Agents whose MCP sessions need managing.
+
+    Raises:
+        AgentExecutionError: for any setup problem.
+    """
+    if not prompt:
+        raise AgentExecutionError("Prompt cannot be empty")
+
+    if execution_mode not in ("single", "team"):
+        raise AgentExecutionError(
+            f"Unknown execution_mode '{execution_mode}'; expected 'single' or 'team'"
         )
-        self.dynamic_team = None
-        self.mcp_stack = None
-    async def initialize_team(self, agent_ids=None, host_agent_id=None, execution_mode="single"):
-        """Initialize the dynamic team with database configurations
-        
-        Args:
-            agent_ids (List[int], optional): List of agent IDs to include in the team.
-                                            If provided, creates a dynamic team with only these agents.
-                                            If None, creates team with all available agents.
-            host_agent_id (int, optional): ID of the host agent for team coordination mode
-            execution_mode (str): "single" for single agent, "team" for team with host coordination
-        """
-        try:
-            logger.info("📊 Loading agent configurations from database...")
 
-            # Get agent configs based on agent_ids or all if none provided
-            if agent_ids:
-                from models.agents_model import get_agent_configs_by_ids
-                agent_configs = get_agent_configs_by_ids(agent_ids)
-                logger.info(f"🔍 Loading configurations for {len(agent_ids)} specific agents (IDs: {agent_ids})")
-                
-                if execution_mode == "team" and host_agent_id:
-                    # Team mode with host coordination
-                    from models.agents_model import get_agent_configs_by_ids as get_host_config
-                    from services.database_service import DatabaseService
-                    
-                    host_agent = DatabaseService.get_host_agent_by_id(host_agent_id)
-                    if not host_agent:
-                        raise ValueError(f"Host agent {host_agent_id} not found")
-                    
-                    team_config = host_agent.get("config", {})
-                    logger.info(f"✅ Using host agent {host_agent.get('name')} for team coordination")
-                else:
-                    # Single agent or team without specific host config
-                    team_config = {
-                        "name": f"Dynamic Team - Agents {agent_ids}",
-                        "mode": "coordinate" if execution_mode == "team" else "standalone",
-                        "instructions": "Execute the task with the selected agents" if execution_mode == "team" else "",
-                        "additional_params": {}
-                    }
-                    if execution_mode == "single":
-                        logger.info(f"✅ Created single agent config")
-                    else:
-                        logger.info(f"✅ Created dynamic team config for specific agents")
-            else:
-                from models.agents_model import get_all_agent_configs
-                agent_configs = get_all_agent_configs()
-                logger.info("🔍 Loading configurations for all available agents")
-                
-                # Get host agent config for all agents
-                team_config = get_host_agent_config_by_name("Mixed Agent Team")
-                if not team_config:
-                    raise ValueError("Host agent 'Mixed Agent Team' configuration not found in database")
-                logger.info(f"✅ Using Mixed Agent Team config for all agents")
-            
-            logger.info(f"✅ Loaded {len(agent_configs)} agent configuration(s)")
+    if not agent_configs:
+        raise AgentExecutionError("No agent configurations supplied")
 
-            # Create async exit stack for MCP tools
-            self.mcp_stack = AsyncExitStack()
+    try:
+        if execution_mode == "single":
+            if len(agent_configs) != 1:
+                raise AgentExecutionError(
+                    f"Single mode expects exactly 1 agent, got {len(agent_configs)}"
+                )
+            agent = build_agent(agent_configs[0])
+            logger.info(f"[{session_id}] Running single agent '{agent.name}'")
+            return agent, [agent]
 
-            # Create dynamic team
-            logger.info("🚀 Creating dynamic team...")
-            self.dynamic_team = await create_dynamic_team_with_mcp(team_config, agent_configs)
+        if not host_config:
+            raise AgentExecutionError("Team mode requires a host agent configuration")
+        team = await create_dynamic_team_with_mcp(host_config, agent_configs)
+        members = list(team.members)
+        logger.info(
+            f"[{session_id}] Running team '{team.name}' with {len(members)} member(s)"
+        )
+        return team, members
+    except AgentBuildError as exc:
+        raise AgentExecutionError(str(exc)) from exc
 
-            # Manage MCP tools lifecycle
-            for agent in self.dynamic_team.members:
-                if hasattr(agent, 'tools'):
-                    for tool in agent.tools:
-                        if isinstance(tool, MCPTools):
-                            await self.mcp_stack.enter_async_context(tool)
 
-            logger.info("✅ Dynamic team initialized successfully!")
+def extract_usage(response: Any) -> Dict[str, Optional[int]]:
+    """
+    Pull token counts out of an Agno response.
 
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize team: {e}", exc_info=True)
-    def run(self, prompt: str, **kwargs) -> Iterator[RunResponse]:  
-        """  
-        Run the agent workflow with the given prompt.  
-        
-        Args:  
-            prompt (str): The prompt for the agent to process  
-            **kwargs: Additional parameters  
-            
-        Yields:  
-            RunResponse: The response from the agent execution  
-        """  
-        try:  
-            import asyncio  
-            
-            # Check if we're in an async context  
-            in_async_context = False
-            try:  
-                asyncio.get_running_loop()
-                in_async_context = True
-            except RuntimeError:  
-                # Not in an async context
-                pass
-                
-            if in_async_context:
-                # If we're in an async context, we can't use run_until_complete or asyncio.run
-                # We need to create a synchronous version of the async function and run it
-                async def async_wrapper():
-                    return await self._async_run(prompt, **kwargs)
-                
-                # Execute the coroutine and get the result synchronously
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(lambda: asyncio.new_event_loop().run_until_complete(async_wrapper()))
-                    result = future.result()
-            else:
-                # No running loop, we can create one  
-                result = asyncio.run(self._async_run(prompt, **kwargs))  
-                
-            # Yield each response from the result list  
-            for response in result:  
-                yield response
+    Agno reports metrics as per-message lists (e.g. input_tokens: [12, 40]), so
+    sum them. Providers that report nothing yield None rather than a false zero.
+    """
+    metrics = getattr(response, "metrics", None)
+    if not isinstance(metrics, dict):
+        return {"input_tokens": None, "output_tokens": None, "total_tokens": None}
 
-            
-                
-        except Exception as e:  
-            logger.error(f"Error in workflow run: {e}")  
-            yield RunResponse(  
-                event=RunEvent.workflow_completed,  
-                content=f"Error in workflow execution: {str(e)}",  
-            )  
-    
-    async def _async_run(self, prompt: str, **kwargs) -> list[RunResponse]:  
-        """  
-        Internal async method to run the agent workflow.  
-        
-        Args:  
-            prompt (str): The prompt for the agent to process  
-            **kwargs: Additional parameters  
-            
-        Returns:  
-            list[RunResponse]: List of responses from the agent execution  
-        """  
-        responses = []  
-        
-        try:  
-            # Initialize team if not already done  
-            if not self.dynamic_team:  
-                await self.initialize_team()  
-            
-            logger.info(f"💬 Processing request: {prompt[:100]}...")  
-            
-            # Execute the team task and capture response - USE ARUN for async agents  
-            response = await self.dynamic_team.arun(prompt, **kwargs)  
-    
-            if response and hasattr(response, 'content') and response.content:  
-                logger.info("✅ Task completed successfully!")  
-                responses.append(RunResponse(  
-                    event=RunEvent.workflow_completed,  
-                    content=response.content,  
-                ))  
-            else:  
-                # If response doesn't have content, try to get it as string  
-                content = str(response) if response else "Task completed but no response content was generated."  
-                logger.warning(f"⚠️ No standard response content, using: {content[:100]}...")  
-                responses.append(RunResponse(  
-                    event=RunEvent.workflow_completed,  
-                    content=content,  
-                ))  
-                
-        except Exception as e:  
-            logger.error(f"❌ Error during agent execution: {str(e)}")  
-            responses.append(RunResponse(  
-                event=RunEvent.workflow_completed,  
-                content=f"Error occurred during task execution: {str(e)}",  
-            ))  
-        finally:  
-            # Clean up MCP stack  
-            if hasattr(self, 'mcp_stack') and self.mcp_stack:  
-                await self.mcp_stack.aclose()  
-        
-        return responses
+    def total(key: str) -> Optional[int]:
+        value = metrics.get(key)
+        if isinstance(value, list):
+            numbers = [v for v in value if isinstance(v, (int, float))]
+            return int(sum(numbers)) if numbers else None
+        if isinstance(value, (int, float)):
+            return int(value)
+        return None
+
+    usage = {
+        "input_tokens": total("input_tokens"),
+        "output_tokens": total("output_tokens"),
+        "total_tokens": total("total_tokens"),
+    }
+    if usage["total_tokens"] is None and (usage["input_tokens"] or usage["output_tokens"]):
+        usage["total_tokens"] = (usage["input_tokens"] or 0) + (usage["output_tokens"] or 0)
+    return usage
+
+
+def _extract_content(response: Any) -> str:
+    """Pull text content out of an Agno RunResponse."""
+    if response is None:
+        return ""
+    content = getattr(response, "content", None)
+    if content is None:
+        return str(response)
+    if isinstance(content, str):
+        return content
+    return str(content)
+
 
 async def run_agent_task(
-    prompt: str = None, 
-    agent_ids: list[int] = None, 
-    host_agent_id: int = None,
+    prompt: str,
+    agent_configs: List[Dict[str, Any]],
+    host_config: Optional[Dict[str, Any]] = None,
     execution_mode: str = "single",
-    **kwargs
+    session_id: Optional[str] = None,
+    **kwargs,
 ) -> Dict[str, Any]:
     """
-    Run agent task with dynamic configuration from database and return response.
-    
-    Supports both single agent and team execution modes.
-    
+    Execute a task against one agent or a coordinated team.
+
     Args:
-        prompt (str): Custom prompt for the agent task
-        agent_ids (list[int]): List of agent IDs to use
-        host_agent_id (int, optional): Host agent ID for team coordination
-        execution_mode (str): "single" or "team"
-        **kwargs: Additional parameters
-        
+        prompt: The task to run.
+        agent_configs: Agent rows already loaded from the database.
+        host_config: The host agent's `config` blob. Required for team mode.
+        execution_mode: "single" or "team".
+        session_id: Stable session id; generated if not supplied.
+        **kwargs: Passed through to Agno's arun().
+
     Returns:
-        Dict[str, Any]: The result of the agent execution
+        Dict with status ("completed" | "error"), content, and run metadata.
+
+    Raises:
+        AgentExecutionError: If the request cannot be set up (bad mode, missing
+            configs, unbuildable agent). Setup problems raise instead of silently
+            substituting a different set of agents.
     """
+    session_id = session_id or f"run-{uuid.uuid4()}"
+    prompt = (prompt or "").strip()
+    runnable, members = await _build_runnable(
+        prompt, agent_configs, host_config, execution_mode, session_id
+    )
+
+    result: Dict[str, Any] = {
+        "status": "error",
+        "message": "",
+        "content": None,
+        "prompt": prompt,
+        "parameters": kwargs,
+        "agent_ids": [c.get("agent_id") for c in agent_configs],
+        "execution_mode": execution_mode,
+        "session_id": session_id,
+    }
+    if execution_mode == "team":
+        result["host_agent_name"] = runnable.name
+
+    # Execution phase. MCP sessions live and die inside this block, on this loop.
+    async with AsyncExitStack() as stack:
+        try:
+            await _register_mcp_sessions(stack, members)
+        except BaseException as exc:
+            detail = _describe_exception(exc)
+            logger.error(f"[{session_id}] MCP connection failed: {detail}", exc_info=True)
+            raise MCPConnectionError(
+                f"Could not connect to an MCP server for this agent ({detail}). "
+                "Check that the MCP endpoint in the agent's mcp_config is running."
+            ) from exc
+
+        try:
+            response = await runnable.arun(prompt, session_id=session_id, **kwargs)
+        except BaseException as exc:
+            detail = _describe_exception(exc)
+            logger.error(f"[{session_id}] Execution failed: {detail}", exc_info=True)
+            result["message"] = f"Execution failed: {detail}"
+            return result
+
+        content = _extract_content(response)
+        if not content:
+            result["message"] = "Agent returned an empty response"
+            return result
+
+        logger.info(f"[{session_id}] Completed ({len(content)} chars)")
+        result.update(
+            status="completed",
+            message="Task executed successfully",
+            content=content,
+            usage=extract_usage(response),
+        )
+        return result
+
+
+async def stream_agent_task(
+    prompt: str,
+    agent_configs: List[Dict[str, Any]],
+    host_config: Optional[Dict[str, Any]] = None,
+    execution_mode: str = "single",
+    session_id: Optional[str] = None,
+    **kwargs,
+) -> AsyncIterator[Dict[str, Any]]:
+    """
+    Execute a task, yielding normalized events as they happen.
+
+    Event shape is deliberately provider-agnostic so the API contract does not
+    change if Agno renames its own events:
+
+        {"type": "started",   "agents": [...], "mode": "team"}
+        {"type": "token",     "text": "..."}                  incremental output
+        {"type": "tool_call", "name": "duckduckgo_search", "status": "started"}
+        {"type": "completed", "output": "...", "usage": {...}}
+        {"type": "error",     "message": "..."}
+
+    A terminal event ("completed" or "error") is always the last thing yielded,
+    including when setup fails, so a consumer never has to infer the end.
+    """
+    session_id = session_id or f"run-{uuid.uuid4()}"
+    prompt = (prompt or "").strip()
+
     try:
-        # Initialize the workflow
-        workflow = AgentWorkflow(
-            session_id=f"agent-task-{hash(prompt or 'default')}",
+        runnable, members = await _build_runnable(
+            prompt, agent_configs, host_config, execution_mode, session_id
         )
-        
-        # Initialize the team with specific agent_ids or all agents
-        await workflow.initialize_team(
-            agent_ids=agent_ids,
-            host_agent_id=host_agent_id,
-            execution_mode=execution_mode
-        )
-        
-        # Execute the workflow and get response iterator
-        workflow_result = list(workflow.run(prompt=prompt, **kwargs))
-        
-        # Return the last result
-        if workflow_result:
-            last_result = workflow_result[-1]
-            logger.info(f"Workflow result: {last_result.content}")
-            return {
-                "status": "completed",
-                "message": "Task executed successfully",
-                "content": last_result.content,
-                "prompt": prompt,
-                "parameters": kwargs,
-                "agent_ids": agent_ids,
-                "host_agent_id": host_agent_id,
-                "execution_mode": execution_mode
+    except AgentExecutionError as exc:
+        yield {"type": "error", "message": str(exc)}
+        return
+
+    yield {
+        "type": "started",
+        "mode": execution_mode,
+        "name": runnable.name,
+        "agents": [getattr(m, "name", "?") for m in members],
+    }
+
+    collected: List[str] = []
+    final_response: Any = None
+
+    async with AsyncExitStack() as stack:
+        try:
+            await _register_mcp_sessions(stack, members)
+        except BaseException as exc:
+            detail = _describe_exception(exc)
+            logger.error(f"[{session_id}] MCP connection failed: {detail}")
+            yield {
+                "type": "error",
+                "message": (
+                    f"Could not connect to an MCP server for this agent ({detail}). "
+                    "Check that the MCP endpoint in the agent's mcp_config is running."
+                ),
             }
-        else:
-            logger.warning("No workflow result found")
-            return {
-                "status": "error",
-                "message": "No result found, please try reformulating your request",
-                "content": None,
-                "prompt": prompt,
-                "parameters": kwargs,
-                "agent_ids": agent_ids,
-                "host_agent_id": host_agent_id,
-                "execution_mode": execution_mode
-            }
-            
-    except Exception as e:
-        logger.error(f"❌ An error occurred: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "status": "error",
-            "message": f"Error occurred during task execution: {str(e)}",
-            "content": None,
-            "prompt": prompt,
-            "parameters": kwargs,
-            "agent_ids": agent_ids,
-            "host_agent_id": host_agent_id,
-            "execution_mode": execution_mode
-        }
+            return
+
+        try:
+            # arun(stream=True) returns a coroutine yielding the async iterator.
+            stream_kwargs = dict(kwargs)
+            if isinstance(runnable, Team):
+                stream_kwargs.setdefault("stream_intermediate_steps", True)
+
+            iterator = await runnable.arun(
+                prompt, stream=True, session_id=session_id, **stream_kwargs
+            )
+
+            async for event in iterator:
+                final_response = event
+                kind = str(getattr(event, "event", "") or "")
+                content = getattr(event, "content", None)
+
+                if kind == "ToolCallStarted":
+                    yield {
+                        "type": "tool_call",
+                        "status": "started",
+                        "name": _tool_name(event),
+                    }
+                elif kind == "ToolCallCompleted":
+                    yield {
+                        "type": "tool_call",
+                        "status": "completed",
+                        "name": _tool_name(event),
+                    }
+                elif kind == "RunResponse" and isinstance(content, str) and content:
+                    collected.append(content)
+                    yield {"type": "token", "text": content}
+                elif kind == "RunError":
+                    yield {"type": "error", "message": str(content or "Run failed")}
+                    return
+
+        except BaseException as exc:
+            detail = _describe_exception(exc)
+            logger.error(f"[{session_id}] Execution failed: {detail}")
+            yield {"type": "error", "message": f"Execution failed: {detail}"}
+            return
+
+    output = "".join(collected).strip()
+    if not output:
+        yield {"type": "error", "message": "Agent returned an empty response"}
+        return
+
+    logger.info(f"[{session_id}] Completed ({len(output)} chars)")
+    yield {
+        "type": "completed",
+        "output": output,
+        "usage": extract_usage(final_response),
+    }
 
 
-async def run_agent_task_legacy(prompt: str = None):
-    """
-    Legacy function for running agent task (for backward compatibility).
-    This version prints output instead of returning it.
-    """
-    result = await run_agent_task(prompt)
-    print(f"Status: {result['status']}")
-    print(f"Message: {result['message']}")
-    if result['content']:
-        print(f"Content: {result['content']}")
-
-
-async def main():  
-    """
-    Main function to run the agent task.
-    """
-    print("🤖 Starting agno_hub Hub Agent...")
-    await run_agent_task_legacy()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+def _tool_name(event: Any) -> str:
+    """Best-effort tool name from a tool-call event."""
+    tool = getattr(event, "tool", None)
+    for attr in ("tool_name", "name"):
+        value = getattr(tool, attr, None)
+        if value:
+            return str(value)
+    tools = getattr(event, "tools", None)
+    if isinstance(tools, list) and tools:
+        first = tools[0]
+        if isinstance(first, dict):
+            return str(first.get("tool_name") or first.get("name") or "tool")
+    return "tool"

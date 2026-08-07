@@ -1,18 +1,35 @@
-from fastapi import APIRouter, HTTPException, Request
-from typing import List, Dict, Any, Optional, Union
+import asyncio
+import json
+import logging
+from typing import Any, Dict, List, Optional, Union
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from controllers.agent_execution_controller import AgentExecutionController
+from controllers.auth_controller import (
+    AuthController,
+    LoginRequest,
+    RegisterRequest,
+    TokenResponse,
+)
 from controllers.agents_controller import (
-    AgentsController,
-    HostAgentsController,
     AgentCreateRequest,
+    AgentsController,
     AgentUpdateRequest,
     HostAgentCreateRequest,
+    HostAgentsController,
 )
-from controllers.agent_execution_controller import AgentExecutionController
-import logging
+from controllers.run_controller import RunController
+from controllers.team_controller import (
+    TeamCreateRequest,
+    TeamsController,
+    TeamUpdateRequest,
+)
+from dependencies import get_current_user, get_current_user_sse
+from services.run_bus import run_bus
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ======================= PYDANTIC MODELS =======================
@@ -36,7 +53,7 @@ class TeamExecutionRequest(BaseModel):
     """Request to run a team with host agent coordination"""
     prompt: str = Field(..., description="The task/prompt for the team", min_length=1)
     hostAgentId: int = Field(..., description="ID of the host/coordinator agent")
-    memberAgentIds: List[int] = Field(..., description="List of member agent IDs", min_items=1)
+    memberAgentIds: List[int] = Field(..., description="List of member agent IDs", min_length=1)
 
 # Unified Chat Request (backward compatible)
 class ChatRequest(BaseModel):
@@ -66,156 +83,87 @@ class ChatResponse(BaseModel):
 router = APIRouter()
 
 
-# ======================= HELPER FUNCTIONS =======================
-
-async def validate_agent_exists(agent_id: int, is_host: bool = False) -> Dict[str, Any]:
-    """Validate that an agent exists in the database."""
-    from services.database_service import DatabaseService
-    
-    if is_host:
-        agent = DatabaseService.get_host_agent_by_id(agent_id)
-        agent_type = "Host Agent"
-    else:
-        agent = DatabaseService.get_agent_by_id(agent_id)
-        agent_type = "Agent"
-    
-    if not agent:
-        raise HTTPException(
-            status_code=404,
-            detail=f"{agent_type} with ID {agent_id} not found in database"
-        )
-    
-    logger.info(f"✅ Validated {agent_type} ID {agent_id}: {agent.get('name', 'Unknown')}")
-    return agent
-
-async def validate_and_load_agents(agent_ids: Optional[List[int]]) -> Dict[str, Any]:
-    """
-    Validate agent IDs and load their configurations from database.
-    
-    Args:
-        agent_ids: List of agent IDs to validate and load
-        
-    Returns:
-        Dict with validation status and loaded agent configs
-        
-    Raises:
-        HTTPException: If validation fails
-    """
-    if not agent_ids:
-        logger.info("No specific agent IDs provided, will use all available agents")
-        return {"valid": True, "agent_ids": None, "agents": []}
-    
-    from services.database_service import DatabaseService
-    
-    if not isinstance(agent_ids, list):
-        raise HTTPException(status_code=400, detail="agentIds must be a list of integers")
-    
-    loaded_agents = []
-    invalid_ids = []
-    
-    for agent_id in agent_ids:
-        if not isinstance(agent_id, int):
-            raise HTTPException(status_code=400, detail=f"Agent ID must be integer, got {type(agent_id)}")
-        
-        try:
-            agent = DatabaseService.get_agent_by_id(agent_id)
-            if agent:
-                loaded_agents.append(agent)
-                logger.info(f"✅ Loaded agent ID {agent_id}: {agent.get('name', 'Unknown')}")
-            else:
-                invalid_ids.append(agent_id)
-                logger.warning(f"⚠️ Agent ID {agent_id} not found in database")
-        except Exception as e:
-            logger.error(f"Error loading agent {agent_id}: {e}")
-            invalid_ids.append(agent_id)
-    
-    if invalid_ids:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Agent IDs not found: {invalid_ids}. Please check agent IDs and try again."
-        )
-    
-    return {
-        "valid": True,
-        "agent_ids": agent_ids,
-        "agents": loaded_agents
-    }
-
-
 # ======================= AGENT CRUD ROUTES =======================
+#
+# Agent existence is checked by AgentExecutionController while it loads the
+# configs it needs, so execution routes do not pre-validate. Doing both meant
+# every request read each agent row twice.
+#
+# Literal paths must stay above /api/agents/{agent_id}; otherwise FastAPI
+# matches the parameterized route first and /api/agents/mcp only works by
+# accident of int coercion failing.
 
-# Get endpoints
 @router.get("/api/agents")
-async def get_agents():
-    """Get all agents"""
-    return await AgentsController.get_all_agents()
+async def get_agents(user=Depends(get_current_user)):
+    """Get all agents visible to the caller"""
+    return await AgentsController.get_all_agents(user)
 
 @router.get("/api/agents/active")
-async def get_active_agents():
-    """Get all active agents"""
-    return await AgentsController.get_active_agents()
-
-@router.get("/api/agents/type/{agent_type}")
-async def get_agents_by_type(agent_type: str):
-    """Get agents by type (simple, mcp, host)"""
-    return await AgentsController.get_agents_by_type(agent_type)
+async def get_active_agents(user=Depends(get_current_user)):
+    """Get active agents visible to the caller"""
+    return await AgentsController.get_active_agents(user)
 
 @router.get("/api/agents/mcp")
-async def get_mcp_agents():
-    """Get all MCP agents"""
-    return await AgentsController.get_agents_by_type("mcp")
+async def get_mcp_agents(user=Depends(get_current_user)):
+    """Get MCP agents visible to the caller"""
+    return await AgentsController.get_agents_by_type("mcp", user)
+
+@router.get("/api/agents/type/{agent_type}")
+async def get_agents_by_type(agent_type: str, user=Depends(get_current_user)):
+    """Get agents by kind (simple, mcp, host)"""
+    return await AgentsController.get_agents_by_type(agent_type, user)
 
 @router.get("/api/agents/name/{name}")
-async def get_agent_by_name(name: str):
+async def get_agent_by_name(name: str, user=Depends(get_current_user)):
     """Get agent by name"""
-    return await AgentsController.get_agent_by_name(name)
+    return await AgentsController.get_agent_by_name(name, user)
 
 @router.get("/api/agents/{agent_id}")
-async def get_agent_by_id(agent_id: int):
+async def get_agent_by_id(agent_id: int, user=Depends(get_current_user)):
     """Get a specific agent by ID"""
-    return await AgentsController.get_agent_by_id(agent_id)
+    return await AgentsController.get_agent_by_id(agent_id, user)
 
 # Create endpoint
 @router.post("/api/agents")
-async def create_agent(agent_data: AgentCreateRequest):
-    """Create a new agent"""
-    return await AgentsController.create_agent(agent_data)
+async def create_agent(agent_data: AgentCreateRequest, user=Depends(get_current_user)):
+    """Create a new agent owned by the caller"""
+    return await AgentsController.create_agent(agent_data, user)
 
 # Update endpoint
 @router.put("/api/agents/{agent_id}")
-async def update_agent(agent_id: int, agent_data: AgentUpdateRequest):
-    """Update an existing agent"""
-    return await AgentsController.update_agent(agent_id, agent_data)
+async def update_agent(agent_id: int, agent_data: AgentUpdateRequest, user=Depends(get_current_user)):
+    """Update an agent the caller owns"""
+    return await AgentsController.update_agent(agent_id, agent_data, user)
 
 # Delete endpoint
 @router.delete("/api/agents/{agent_id}")
-async def delete_agent(agent_id: int):
-    """Delete an agent"""
-    return await AgentsController.delete_agent(agent_id)
+async def delete_agent(agent_id: int, user=Depends(get_current_user)):
+    """Delete an agent the caller owns"""
+    return await AgentsController.delete_agent(agent_id, user)
 
 
 # ======================= HOST AGENT ROUTES =======================
 
 @router.get("/api/host-agents")
-async def get_host_agents():
-    """Get all host agents"""
-    return await HostAgentsController.get_all_host_agents()
+async def get_host_agents(user=Depends(get_current_user)):
+    """Get coordinators visible to the caller"""
+    return await HostAgentsController.get_all_host_agents(user)
 
 @router.get("/api/host-agents/{agent_id}")
-async def get_host_agent_by_id(agent_id: int):
-    """Get a specific host agent by ID"""
-    return await HostAgentsController.get_host_agent_by_id(agent_id)
+async def get_host_agent_by_id(agent_id: int, user=Depends(get_current_user)):
+    """Get a specific coordinator by ID"""
+    return await HostAgentsController.get_host_agent_by_id(agent_id, user)
 
 @router.post("/api/host-agents")
-async def create_host_agent(agent_data: HostAgentCreateRequest):
-    """Create a new host agent"""
-    return await HostAgentsController.create_host_agent(agent_data)
+async def create_host_agent(agent_data: HostAgentCreateRequest, user=Depends(get_current_user)):
+    """Create a coordinator owned by the caller"""
+    return await HostAgentsController.create_host_agent(agent_data, user)
 
 
 # ======================= AGENT EXECUTION ROUTES =======================
 
 @router.post("/api/chat", response_model=ChatResponse)
-async def process_chat(chat_request: ChatRequest):
+async def process_chat(chat_request: ChatRequest, user=Depends(get_current_user)):
     """
     Process a chat message using agents.
     
@@ -252,31 +200,21 @@ async def process_chat(chat_request: ChatRequest):
                 detail="Prompt cannot be empty. Please provide a valid task or question."
             )
         
-        # Step 2: Validate and load agents if IDs provided
-        agent_validation = await validate_and_load_agents(chat_request.agentIds)
-        
-        if not agent_validation["valid"]:
-            logger.error("❌ Agent validation failed")
-            raise HTTPException(status_code=400, detail="Agent validation failed")
-        
-        agents_loaded = agent_validation.get("agents", [])
-        if chat_request.agentIds:
-            logger.info(f"✅ Validated {len(agents_loaded)} agents successfully")
-            for agent in agents_loaded:
-                logger.info(f"   - {agent.get('name', 'Unknown')} (ID: {agent.get('agent_id')})")
-        
-        # Step 3: Execute agent task
-        logger.info("🚀 Executing agent task...")
+        # Step 2: Execute agent task. The controller loads and validates the
+        # agents as part of setting up the run.
+        logger.info("Executing agent task...")
         result = await AgentExecutionController.execute_agent_task(
             prompt=chat_request.prompt.strip(),
-            agent_ids=chat_request.agentIds
+            agent_ids=chat_request.agentIds,
+            host_agent_id=chat_request.hostAgentId,
+            owner_id=user["user_id"],
         )
         
         # Step 4: Process and return response
         if result.get("status") == "completed":
             logger.info("✅ Task completed successfully")
             return ChatResponse(
-                response=result.get("content", "No response generated"),
+                response=result.get("content") or "No response generated",
                 agents=chat_request.agentIds,
                 status="completed",
                 message="Task executed successfully"
@@ -285,7 +223,7 @@ async def process_chat(chat_request: ChatRequest):
             error_msg = result.get("message", "Unknown error")
             logger.error(f"❌ Task failed: {error_msg}")
             return ChatResponse(
-                response=result.get("content", ""),
+                response=result.get("content") or "",
                 agents=chat_request.agentIds,
                 status="error",
                 message=error_msg
@@ -305,7 +243,7 @@ async def process_chat(chat_request: ChatRequest):
 # ======================= SINGLE AGENT EXECUTION =======================
 
 @router.post("/api/agent/run", response_model=ExecutionResponse)
-async def run_single_agent(request: SingleAgentRequest):
+async def run_single_agent(request: SingleAgentRequest, user=Depends(get_current_user)):
     """
     Execute a single agent directly.
     
@@ -328,21 +266,13 @@ async def run_single_agent(request: SingleAgentRequest):
         import time
         start_time = time.time()
         
-        logger.info("=" * 80)
-        logger.info("🎯 SINGLE AGENT EXECUTION")
-        logger.info("=" * 80)
-        logger.info(f"📋 Agent ID: {request.agentId}")
-        logger.info(f"📝 Prompt: {request.prompt[:100]}...")
-        
-        # Step 1: Validate agent exists
-        agent = await validate_agent_exists(request.agentId, is_host=False)
-        logger.info(f"✅ Agent validated: {agent.get('name', 'Unknown')}")
-        
-        # Step 2: Execute single agent
-        logger.info("🚀 Executing agent...")
+        logger.info(f"Single agent execution | agent_id={request.agentId} | "
+                    f"prompt={request.prompt[:100]}")
+
         result = await AgentExecutionController.execute_single_agent(
             prompt=request.prompt.strip(),
-            agent_id=request.agentId
+            agent_id=request.agentId,
+            owner_id=user["user_id"],
         )
         
         execution_time = time.time() - start_time
@@ -352,7 +282,7 @@ async def run_single_agent(request: SingleAgentRequest):
         if result.get("status") == "completed":
             logger.info("✅ Single agent execution successful")
             return ExecutionResponse(
-                response=result.get("content", "No response generated"),
+                response=result.get("content") or "No response generated",
                 mode="single",
                 agents_used=[request.agentId],
                 status="completed",
@@ -362,7 +292,7 @@ async def run_single_agent(request: SingleAgentRequest):
         else:
             logger.error(f"❌ Execution failed: {result.get('message')}")
             return ExecutionResponse(
-                response=result.get("content", ""),
+                response=result.get("content") or "",
                 mode="single",
                 agents_used=[request.agentId],
                 status="error",
@@ -380,7 +310,7 @@ async def run_single_agent(request: SingleAgentRequest):
 # ======================= TEAM EXECUTION =======================
 
 @router.post("/api/team/run", response_model=ExecutionResponse)
-async def run_team(request: TeamExecutionRequest):
+async def run_team_adhoc(request: TeamExecutionRequest, user=Depends(get_current_user)):
     """
     Execute a team with host agent coordination.
     
@@ -407,33 +337,14 @@ async def run_team(request: TeamExecutionRequest):
         import time
         start_time = time.time()
         
-        logger.info("=" * 80)
-        logger.info("👥 TEAM EXECUTION WITH HOST COORDINATION")
-        logger.info("=" * 80)
-        logger.info(f"🎯 Host Agent ID: {request.hostAgentId}")
-        logger.info(f"👤 Member Agent IDs: {request.memberAgentIds}")
-        logger.info(f"📝 Prompt: {request.prompt[:100]}...")
-        
-        # Step 1: Validate host agent exists
-        host_agent = await validate_agent_exists(request.hostAgentId, is_host=True)
-        logger.info(f"✅ Host agent validated: {host_agent.get('name', 'Unknown')}")
-        
-        # Step 2: Validate all member agents exist
-        logger.info(f"🔍 Validating {len(request.memberAgentIds)} member agents...")
-        member_agents = []
-        for agent_id in request.memberAgentIds:
-            agent = await validate_agent_exists(agent_id, is_host=False)
-            member_agents.append(agent)
-            logger.info(f"   ✅ {agent.get('name', 'Unknown')} (ID: {agent_id})")
-        
-        logger.info(f"✅ All member agents validated")
-        
-        # Step 3: Execute team with host coordination
-        logger.info("🚀 Executing team with host coordination...")
+        logger.info(f"Team execution | host={request.hostAgentId} | "
+                    f"members={request.memberAgentIds} | prompt={request.prompt[:100]}")
+
         result = await AgentExecutionController.execute_team(
             prompt=request.prompt.strip(),
             host_agent_id=request.hostAgentId,
-            member_agent_ids=request.memberAgentIds
+            member_agent_ids=request.memberAgentIds,
+            owner_id=user["user_id"],
         )
         
         execution_time = time.time() - start_time
@@ -444,7 +355,7 @@ async def run_team(request: TeamExecutionRequest):
         if result.get("status") == "completed":
             logger.info("✅ Team execution successful")
             return ExecutionResponse(
-                response=result.get("content", "No response generated"),
+                response=result.get("content") or "No response generated",
                 mode="team",
                 agents_used=all_agents,
                 status="completed",
@@ -454,7 +365,7 @@ async def run_team(request: TeamExecutionRequest):
         else:
             logger.error(f"❌ Team execution failed: {result.get('message')}")
             return ExecutionResponse(
-                response=result.get("content", ""),
+                response=result.get("content") or "",
                 mode="team",
                 agents_used=all_agents,
                 status="error",
@@ -468,3 +379,176 @@ async def run_team(request: TeamExecutionRequest):
         logger.error(f"❌ Error in team execution: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
 
+
+
+# ======================= RUN ROUTES (streaming) =======================
+
+class TeamRunRequest(BaseModel):
+    """Run a saved team."""
+    prompt: str = Field(..., description="The task to execute", min_length=1)
+
+
+class RunCreateRequest(BaseModel):
+    """Start a run. One agent runs alone; several are coordinated by a host."""
+    prompt: str = Field(..., description="The task to execute", min_length=1)
+    agentIds: Optional[List[int]] = Field(None, description="Agent IDs to use")
+    hostAgentId: Optional[int] = Field(None, description="Coordinator for team mode")
+    teamId: Optional[int] = Field(None, description="Run a saved team by id")
+
+
+@router.post("/api/runs", status_code=202)
+async def create_run(request: RunCreateRequest, user=Depends(get_current_user)):
+    """
+    Start a run and return immediately with its id.
+
+    Execution continues server-side regardless of what the client does next, so
+    a closed tab or a proxy timeout no longer discards the work. Subscribe to
+    /api/runs/{run_id}/events for progress, or poll /api/runs/{run_id}.
+    """
+    return RunController.start(
+        prompt=request.prompt,
+        user=user,
+        agent_ids=request.agentIds,
+        host_agent_id=request.hostAgentId,
+        team_id=request.teamId,
+    )
+
+
+@router.get("/api/runs")
+async def list_runs(
+    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = Query(None, description="Filter by run status"),
+    user=Depends(get_current_user),
+):
+    """List the caller's recent runs, newest first."""
+    return RunController.list_recent(user=user, limit=limit, status=status)
+
+
+@router.get("/api/runs/{run_id}")
+async def get_run(run_id: str, user=Depends(get_current_user)):
+    """Fetch a single run record."""
+    return RunController.get(run_id, user)
+
+
+@router.get("/api/runs/{run_id}/events")
+async def stream_run_events(
+    run_id: str, request: Request, user=Depends(get_current_user_sse)
+):
+    """
+    Server-sent events for a run.
+
+    Replays everything already emitted before streaming live output, so a
+    client that subscribes slightly late still sees the whole run. If the run
+    has already finished, its terminal state is replayed from the database and
+    the stream closes immediately.
+    """
+    record = RunController.get(run_id, user)  # 404s for unknown or foreign runs
+
+    async def event_source():
+        channel = run_bus.get(run_id)
+
+        if channel is None:
+            # Not in flight: reconstruct a terminal event from the stored row.
+            if record["status"] == "completed":
+                payload = {"type": "completed", "output": record.get("output") or "",
+                           "usage": {"total_tokens": record.get("total_tokens")}}
+            elif record["status"] == "error":
+                payload = {"type": "error", "message": record.get("error") or "Run failed"}
+            else:
+                payload = {"type": "error",
+                           "message": "Run is not active on this server and has no result"}
+            yield _sse(payload)
+            return
+
+        try:
+            async for event in channel.subscribe():
+                yield _sse(event)
+        except asyncio.CancelledError:
+            # Raised into the generator when the client goes away; the finally
+            # block below still runs. An explicit is_disconnected() poll here
+            # would additionally drop the event already taken off the queue.
+            raise
+        finally:
+            # Drop the channel once it is closed and nobody is reading it.
+            if channel.closed:
+                run_bus.discard(run_id)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Stops nginx buffering the stream into uselessness.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(payload: Dict[str, Any]) -> str:
+    """Encode one event in the SSE wire format."""
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+# ======================= TEAM ROUTES =======================
+#
+# Teams persist composition, so a group of agents can be named, reused, and
+# shared instead of being re-specified by the client on every request.
+
+@router.get("/api/teams")
+async def list_teams(user=Depends(get_current_user)):
+    """List teams visible to the caller."""
+    return await TeamsController.list_teams(user)
+
+
+@router.post("/api/teams", status_code=201)
+async def create_team(payload: TeamCreateRequest, user=Depends(get_current_user)):
+    """Create a reusable team owned by the caller."""
+    return await TeamsController.create_team(payload, user)
+
+
+@router.get("/api/teams/{team_id}")
+async def get_team(team_id: int, user=Depends(get_current_user)):
+    """Fetch a team by id."""
+    return await TeamsController.get_team(team_id, user)
+
+
+@router.put("/api/teams/{team_id}")
+async def update_team(team_id: int, payload: TeamUpdateRequest, user=Depends(get_current_user)):
+    """Update a team. Supplying memberAgentIds replaces membership entirely."""
+    return await TeamsController.update_team(team_id, payload, user)
+
+
+@router.delete("/api/teams/{team_id}")
+async def delete_team(team_id: int, user=Depends(get_current_user)):
+    """Delete a team. Membership rows cascade; the agents themselves remain."""
+    return await TeamsController.delete_team(team_id, user)
+
+
+@router.post("/api/teams/{team_id}/runs", status_code=202)
+async def run_team(team_id: int, request: TeamRunRequest, user=Depends(get_current_user)):
+    """Start a run using a saved team's coordinator and membership."""
+    return RunController.start(prompt=request.prompt, team_id=team_id, user=user)
+
+
+# ======================= AUTH ROUTES =======================
+#
+# The only endpoints reachable without a token. Everything else requires
+# Authorization: Bearer <access_token>.
+
+@router.post("/api/auth/register", response_model=TokenResponse, status_code=201)
+async def register(payload: RegisterRequest):
+    """Create an account and return an access token. First account is admin."""
+    return await AuthController.register(payload)
+
+
+@router.post("/api/auth/login", response_model=TokenResponse)
+async def login(payload: LoginRequest):
+    """Exchange email and password for an access token."""
+    return await AuthController.login(payload)
+
+
+@router.get("/api/auth/me")
+async def me(user=Depends(get_current_user)):
+    """Return the signed-in account."""
+    return await AuthController.me(user)

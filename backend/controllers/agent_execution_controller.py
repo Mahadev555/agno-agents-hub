@@ -1,178 +1,231 @@
 """
 Agent Execution Controller
-Handles execution of agent tasks with dynamic configurations.
-Supports both specific agents (by ID) and all available agents.
+
+Loads agent configurations from the database and hands them to the async
+execution runtime. This is the only layer that fetches execution configs, so a
+request loads each agent exactly once.
 """
 
 import logging
-import asyncio
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
+
 from fastapi import HTTPException
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+from agents.subhost.agent import (
+    AgentExecutionError,
+    MCPConnectionError,
+    run_agent_task,
+)
+from models.run import RunStatus
+from services.database_service import DatabaseService
+from services.run_service import RunService
+
 logger = logging.getLogger(__name__)
 
 
+def _to_http_error(exc: AgentExecutionError) -> HTTPException:
+    """Map a setup failure to a status code that reflects whose fault it is."""
+    if isinstance(exc, MCPConnectionError):
+        # An unreachable upstream is not the caller's mistake.
+        return HTTPException(status_code=502, detail=str(exc))
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+async def _recorded(
+    prompt: str,
+    mode: str,
+    agent_ids: List[int],
+    host_agent_id: Optional[int],
+    coro_factory,
+    owner_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Run a non-streaming execution while persisting a run record around it.
+
+    The blocking endpoints predate /api/runs but still belong in history, so
+    they write the same rows. The run id is threaded through as the session id
+    so logs from both paths correlate the same way.
+    """
+    record = RunService.create(
+        prompt=prompt,
+        mode=mode,
+        agent_ids=agent_ids,
+        host_agent_id=host_agent_id,
+        owner_id=owner_id,
+    )
+    run_id = record["run_id"]
+    RunService.mark_running(run_id)
+
+    try:
+        result = await coro_factory(run_id)
+    except HTTPException as exc:
+        RunService.finish(run_id, RunStatus.ERROR, error=str(exc.detail))
+        raise
+    except Exception as exc:
+        RunService.finish(run_id, RunStatus.ERROR, error=str(exc))
+        raise
+
+    completed = result.get("status") == "completed"
+    RunService.finish(
+        run_id,
+        RunStatus.COMPLETED if completed else RunStatus.ERROR,
+        output=result.get("content"),
+        error=None if completed else result.get("message"),
+        usage=result.get("usage"),
+    )
+    result["run_id"] = run_id
+    return result
+
+
 class AgentExecutionController:
-    """Controller for executing agent tasks"""
-    
+    """Controller for executing agent tasks."""
+
     @staticmethod
-    async def execute_agent_task(
-        prompt: str, 
-        agent_ids: Optional[List[int]] = None, 
-        **kwargs
-    ) -> Dict[str, Any]:
+    def _load_agents(agent_ids: Optional[List[int]]) -> List[Dict[str, Any]]:
         """
-        Execute an agent task with the provided prompt and optional agent IDs.
-        
-        Flow:
-        1. Validate inputs
-        2. Load agent configurations from database (by IDs or all)
-        3. Create agents dynamically from configs
-        4. Execute the task with the dynamic team
-        5. Return response
-        
-        Args:
-            prompt (str): The prompt/task for the agent to execute
-            agent_ids (Optional[List[int]], optional): List of specific agent IDs to use.
-                                                       If None, uses all available agents.
-            **kwargs: Additional parameters for the task
-            
-        Returns:
-            Dict[str, Any]: Result dict with keys:
-                - status: "completed" or "error"
-                - message: Status message
-                - content: Response from the agents
-                - prompt: The input prompt
-                - agent_ids: The agent IDs used
-                - parameters: Additional parameters
-            
-        Raises:
-            HTTPException: If task execution fails
+        Load agent rows for the given IDs in one query.
+
+        Passing None loads every active agent. Any ID that does not resolve is a
+        404 rather than a silent omission.
         """
-        try:
-            logger.info("=" * 80)
-            logger.info("🔄 AGENT EXECUTION CONTROLLER - STARTING TASK EXECUTION")
-            logger.info("=" * 80)
-            
-            logger.info(f"📋 Task Details:")
-            logger.info(f"   Prompt: {prompt[:100]}...")
-            logger.info(f"   Specific Agent IDs: {agent_ids if agent_ids else 'All agents'}")
-            logger.info(f"   Additional Parameters: {list(kwargs.keys())}")
-            
-            # Import here to avoid circular imports
-            from agents.subhost.agent import run_agent_task
-            
-            # Execute the agent task with agent_ids
-            logger.info(f"\n🚀 Executing agent task...")
-            logger.info(f"   Agent IDs: {agent_ids}")
-            
-            result = await run_agent_task(
-                prompt=prompt, 
-                agent_ids=agent_ids, 
-                **kwargs
-            )
-            
-            logger.info(f"\n✅ Agent task completed successfully")
-            logger.info(f"   Status: {result.get('status')}")
-            logger.info(f"   Message: {result.get('message')}")
-            if result.get('content'):
-                logger.info(f"   Response Length: {len(str(result.get('content')))} chars")
-            
-            logger.info("=" * 80)
-            
-            # Return the result from the agent workflow
-            return result
-            
-        except Exception as e:
-            logger.error("=" * 80)
-            logger.error(f"❌ ERROR executing agent task:")
-            logger.error(f"   Exception: {type(e).__name__}: {str(e)}")
-            logger.error("=" * 80)
-            
+        if agent_ids is None:
+            agents = DatabaseService.get_active_agents()
+            if not agents:
+                raise HTTPException(status_code=400, detail="No active agents available")
+            return agents
+
+        agents = DatabaseService.get_agents_by_ids(agent_ids)
+        found = {a["agent_id"] for a in agents}
+        missing = [i for i in agent_ids if i not in found]
+        if missing:
+            raise HTTPException(status_code=404, detail=f"Agent IDs not found: {missing}")
+        return agents
+
+    @staticmethod
+    def _default_host_agent() -> Dict[str, Any]:
+        """
+        The coordinator used when several agents are requested without one.
+
+        Multiple agents cannot run without something to delegate between them,
+        so a missing default is a hard error rather than an arbitrary pick.
+        """
+        host_agent = DatabaseService.get_host_agent_by_name("Mixed Agent Team")
+        if not host_agent:
             raise HTTPException(
-                status_code=500, 
-                detail=f"Failed to execute agent task: {str(e)}"
+                status_code=400,
+                detail=(
+                    "Multiple agents require a coordinator, but no hostAgentId was "
+                    "supplied and the default 'Mixed Agent Team' host agent does "
+                    "not exist."
+                ),
             )
-    
+        return host_agent
+
+    @staticmethod
+    def _load_host_config(host_agent_id: int) -> Dict[str, Any]:
+        """Load a host agent's config blob, 404ing if it does not exist."""
+        host_agent = DatabaseService.get_host_agent_by_id(host_agent_id)
+        if not host_agent:
+            raise HTTPException(
+                status_code=404, detail=f"Host agent with ID {host_agent_id} not found"
+            )
+
+        config = host_agent.get("config") or {}
+        # The row-level mode column is authoritative if the blob omits it.
+        config.setdefault("mode", host_agent.get("mode", "coordinate"))
+        config.setdefault("name", host_agent.get("name", "Dynamic Team"))
+        return config
+
     @staticmethod
     async def execute_single_agent(
-        prompt: str, 
-        agent_id: int
+        prompt: str, agent_id: int, owner_id: Optional[int] = None
     ) -> Dict[str, Any]:
-        """
-        Execute a single agent directly.
-        
-        Args:
-            prompt (str): The prompt/task for the agent
-            agent_id (int): ID of the agent to execute
-            
-        Returns:
-            Dict[str, Any]: Result dict with execution details
-        """
-        try:
-            logger.info(f"🎯 Executing single agent {agent_id}")
-            
-            from agents.subhost.agent import run_agent_task
-            
-            # Run agent with single agent ID
-            result = await run_agent_task(
-                prompt=prompt,
-                agent_ids=[agent_id],
-                execution_mode="single"
-            )
-            
-            logger.info(f"✅ Single agent execution complete")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Error executing single agent: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to execute agent: {str(e)}"
-            )
-    
+        """Execute one agent directly, with no team wrapper."""
+        agents = AgentExecutionController._load_agents([agent_id])
+
+        async def _run(run_id: str) -> Dict[str, Any]:
+            try:
+                return await run_agent_task(
+                    prompt=prompt,
+                    agent_configs=agents,
+                    execution_mode="single",
+                    session_id=run_id,
+                )
+            except AgentExecutionError as e:
+                logger.error(f"[{run_id}] single agent setup failed: {e}")
+                raise _to_http_error(e)
+
+        return await _recorded(
+            prompt=prompt,
+            mode="single",
+            agent_ids=[agent_id],
+            host_agent_id=None,
+            coro_factory=_run,
+            owner_id=owner_id,
+        )
+
     @staticmethod
     async def execute_team(
         prompt: str,
         host_agent_id: int,
-        member_agent_ids: List[int]
+        member_agent_ids: List[int],
+        owner_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Execute a team coordinated by a host agent."""
+        host_config = AgentExecutionController._load_host_config(host_agent_id)
+        agents = AgentExecutionController._load_agents(member_agent_ids)
+
+        async def _run(run_id: str) -> Dict[str, Any]:
+            try:
+                return await run_agent_task(
+                    prompt=prompt,
+                    agent_configs=agents,
+                    host_config=host_config,
+                    execution_mode="team",
+                    session_id=run_id,
+                )
+            except AgentExecutionError as e:
+                logger.error(f"[{run_id}] team setup failed: {e}")
+                raise _to_http_error(e)
+
+        result = await _recorded(
+            prompt=prompt,
+            mode="team",
+            agent_ids=member_agent_ids,
+            host_agent_id=host_agent_id,
+            coro_factory=_run,
+            owner_id=owner_id,
+        )
+        result["host_agent_id"] = host_agent_id
+        return result
+
+    @staticmethod
+    async def execute_agent_task(
+        prompt: str,
+        agent_ids: Optional[List[int]] = None,
+        host_agent_id: Optional[int] = None,
+        owner_id: Optional[int] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
-        Execute a team with host agent coordination.
-        
-        The host agent coordinates the team, divides tasks among members,
-        and consolidates the final response.
-        
-        Args:
-            prompt (str): The prompt/task for the team
-            host_agent_id (int): ID of the host/coordinator agent
-            member_agent_ids (List[int]): IDs of member agents
-            
-        Returns:
-            Dict[str, Any]: Result dict with consolidated response
+        Backing implementation for /api/chat.
+
+        Picks a mode from the request shape: a single agent runs directly, and
+        anything else is coordinated by a host agent.
         """
-        try:
-            logger.info(f"👥 Executing team with host agent {host_agent_id}")
-            logger.info(f"   Members: {member_agent_ids}")
-            
-            from agents.subhost.agent import run_agent_task
-            
-            # Run team with host agent coordinating
-            result = await run_agent_task(
-                prompt=prompt,
-                agent_ids=member_agent_ids,
-                host_agent_id=host_agent_id,
-                execution_mode="team"
+        agents = AgentExecutionController._load_agents(agent_ids)
+
+        if len(agents) == 1 and host_agent_id is None:
+            return await AgentExecutionController.execute_single_agent(
+                prompt=prompt, agent_id=agents[0]["agent_id"], owner_id=owner_id
             )
-            
-            logger.info(f"✅ Team execution complete")
-            return result
-            
-        except Exception as e:
-            logger.error(f"❌ Error executing team: {e}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to execute team: {str(e)}"
-            )
+
+        if host_agent_id is None:
+            host_agent_id = AgentExecutionController._default_host_agent()["agent_id"]
+
+        return await AgentExecutionController.execute_team(
+            prompt=prompt,
+            host_agent_id=host_agent_id,
+            member_agent_ids=[a["agent_id"] for a in agents],
+            owner_id=owner_id,
+        )
