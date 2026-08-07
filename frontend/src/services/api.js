@@ -8,6 +8,24 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 const CRUD_TIMEOUT = 15000
 const EXECUTION_TIMEOUT = 300000
 
+// The access token lives in localStorage. That is readable by any script on
+// the page, so it is only as safe as the app's XSS posture; httpOnly cookies
+// would be stronger but need CSRF handling and a same-site deployment.
+const TOKEN_KEY = 'agnohub.token'
+
+export const tokenStore = {
+  get: () => localStorage.getItem(TOKEN_KEY),
+  set: (token) => localStorage.setItem(TOKEN_KEY, token),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+}
+
+// Notified when the server rejects our token, so the app can show the login
+// screen instead of rendering empty lists.
+let onUnauthenticated = null
+export const setUnauthenticatedHandler = (fn) => {
+  onUnauthenticated = fn
+}
+
 // Create axios instance
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -15,6 +33,15 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: CRUD_TIMEOUT,
+})
+
+// Attach the bearer token to every request.
+api.interceptors.request.use((config) => {
+  const token = tokenStore.get()
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
 })
 
 /**
@@ -60,6 +87,13 @@ api.interceptors.response.use(
   (error) => {
     const message = extractErrorMessage(error)
     console.error('API Error:', error.response?.status ?? '', message)
+
+    // An expired or revoked token should drop the session rather than leave
+    // the UI in a half-broken state.
+    if (error.response?.status === 401) {
+      tokenStore.clear()
+      onUnauthenticated?.()
+    }
 
     const normalized = new Error(message)
     normalized.status = error.response?.status
@@ -173,7 +207,12 @@ export const runService = {
    * @returns {() => void} cancel function that closes the stream.
    */
   stream: (runId, { onEvent, onDone, onError } = {}) => {
-    const source = new EventSource(`${API_BASE_URL}/api/runs/${runId}/events`)
+    // EventSource cannot send an Authorization header, so the token goes in the
+    // query string. The endpoint accepts either.
+    const token = tokenStore.get()
+    const url = `${API_BASE_URL}/api/runs/${runId}/events`
+      + (token ? `?access_token=${encodeURIComponent(token)}` : '')
+    const source = new EventSource(url)
     let settled = false
 
     const finish = (fn, arg) => {
@@ -207,6 +246,35 @@ export const runService = {
 
     return () => finish(() => {})
   },
+}
+
+export const authService = {
+  register: async (email, password, displayName) => {
+    const response = await api.post('/api/auth/register', {
+      email,
+      password,
+      display_name: displayName || undefined,
+    })
+    tokenStore.set(response.data.access_token)
+    return response.data.user
+  },
+
+  login: async (email, password) => {
+    const response = await api.post('/api/auth/login', { email, password })
+    tokenStore.set(response.data.access_token)
+    return response.data.user
+  },
+
+  me: async () => {
+    const response = await api.get('/api/auth/me')
+    return response.data
+  },
+
+  logout: () => {
+    tokenStore.clear()
+  },
+
+  hasToken: () => Boolean(tokenStore.get()),
 }
 
 export default api

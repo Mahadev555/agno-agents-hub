@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, Bell, Settings, LogOut } from 'lucide-react'
 import { useState } from 'react'
 
-const Header = ({ sidebarOpen, setSidebarOpen }) => {
+const Header = ({ sidebarOpen, setSidebarOpen, user, onSignOut }) => {
   const [menuOpen, setMenuOpen] = useState(false)
 
   return (
@@ -49,8 +49,9 @@ const Header = ({ sidebarOpen, setSidebarOpen }) => {
               whileTap={{ scale: 0.95 }}
               onClick={() => setMenuOpen(!menuOpen)}
               className="w-10 h-10 rounded-lg bg-gradient-to-r from-primary-500 to-primary-600 text-white font-bold flex items-center justify-center hover:shadow-lg transition-all"
+              title={user?.email}
             >
-              AH
+              {(user?.display_name || user?.email || 'AH').slice(0, 2).toUpperCase()}
             </motion.button>
 
             <AnimatePresence>
@@ -59,15 +60,30 @@ const Header = ({ sidebarOpen, setSidebarOpen }) => {
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="absolute top-12 right-0 w-48 bg-white rounded-lg shadow-lg border border-slate-200 overflow-hidden"
+                  className="absolute top-12 right-0 w-56 bg-white rounded-lg shadow-lg border border-slate-200 overflow-hidden"
                 >
-                  <button className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors flex items-center gap-2">
-                    <Settings size={18} />
-                    Settings
-                  </button>
-                  <button className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors flex items-center gap-2 border-t border-slate-200 text-red-600">
+                  {user && (
+                    <div className="px-4 py-3 border-b border-slate-200">
+                      <div className="text-sm font-medium text-slate-900 truncate">
+                        {user.display_name || user.email}
+                      </div>
+                      <div className="text-xs text-slate-500 truncate">{user.email}</div>
+                      {user.is_admin && (
+                        <span className="inline-block mt-1 text-xs px-2 py-0.5 rounded bg-primary-100 text-primary-700">
+                          admin
+                        </span>
+                      )}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => {
+                      setMenuOpen(false)
+                      onSignOut?.()
+                    }}
+                    className="w-full px-4 py-2 text-left hover:bg-slate-50 transition-colors flex items-center gap-2 text-red-600"
+                  >
                     <LogOut size={18} />
-                    Logout
+                    Sign out
                   </button>
                 </motion.div>
               )}
