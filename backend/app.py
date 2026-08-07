@@ -7,8 +7,22 @@ from connection import init_db
 import os
 from contextlib import asynccontextmanager
 
-# Create client build directory path
-client_build_dir = os.path.join("backend", "static")
+# Resolve relative to this file, not the process working directory, so the SPA
+# is found whether the server is started from the repo root or from backend/.
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+client_build_dir = os.path.join(BACKEND_DIR, "static")
+
+# Comma-separated list of allowed browser origins.
+# "*" is only honoured when credentials are disabled, because the CORS spec
+# forbids a wildcard origin on credentialed requests.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
+    if origin.strip()
+]
+ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
+if "*" in ALLOWED_ORIGINS:
+    ALLOW_CREDENTIALS = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,11 +53,17 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health():
+    """Liveness probe that does not touch the database."""
+    return {"status": "ok"}
 
 # Include API routes
 app.include_router(router)

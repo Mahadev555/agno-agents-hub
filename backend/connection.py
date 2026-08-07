@@ -1,9 +1,10 @@
 import os
 import logging
 from dotenv import load_dotenv
+from contextlib import contextmanager
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import NullPool
 from sqlalchemy.exc import OperationalError
 
 # Configure logging
@@ -20,13 +21,17 @@ if not DATABASE_URL:
 
 logger.info("Initializing database connection...")
 
-# Create SQLAlchemy engine
-# NullPool is used to avoid connection pooling issues with psycopg2
+# Pooled connections. Previously NullPool, which opened a fresh TCP+TLS
+# connection to Neon for every single query (~50-100ms of blocked event loop
+# each). pool_pre_ping discards connections the server dropped, and
+# pool_recycle stays under Neon's idle timeout.
 engine = create_engine(
     DATABASE_URL,
     echo=False,  # Set to True for SQL debugging
     pool_pre_ping=True,  # Verify connections before using them
-    poolclass=NullPool  # Don't pool connections
+    pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+    max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
+    pool_recycle=int(os.getenv("DB_POOL_RECYCLE", "280")),
 )
 
 # Create session factory
@@ -35,14 +40,34 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 def get_session() -> Session:
     """
     Get a new database session.
-    
+
+    Caller owns the session and must close it. Prefer session_scope() for new
+    code.
+
     Returns:
         Session: SQLAlchemy session object
-        
-    Raises:
-        OperationalError: If database connection fails
     """
     return SessionLocal()
+
+
+@contextmanager
+def session_scope():
+    """
+    Session context manager that commits on success and rolls back on error.
+
+    Usage:
+        with session_scope() as session:
+            session.add(obj)
+    """
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
 
 def init_db(recreate_tables=False):
     """

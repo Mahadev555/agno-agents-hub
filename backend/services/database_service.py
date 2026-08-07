@@ -112,6 +112,39 @@ class DatabaseService:
                 session.close()
     
     @staticmethod
+    def get_agents_by_ids(agent_ids: List[int]) -> List[Dict[str, Any]]:
+        """
+        Retrieve multiple agents in a single query.
+
+        Args:
+            agent_ids (List[int]): The IDs to fetch
+
+        Returns:
+            List[Dict[str, Any]]: Found agents, ordered to match agent_ids.
+                Missing IDs are simply absent; callers should compare lengths
+                or diff the ids to detect them.
+        """
+        if not agent_ids:
+            return []
+
+        session: Session = None
+        try:
+            session = get_session()
+            agents = session.query(Agent).filter(Agent.agent_id.in_(agent_ids)).all()
+            by_id = {agent.agent_id: agent.to_dict() for agent in agents}
+
+            # Preserve caller ordering; it determines team member order.
+            result = [by_id[agent_id] for agent_id in agent_ids if agent_id in by_id]
+            logger.info(f"Retrieved {len(result)}/{len(agent_ids)} agents in one query")
+            return result
+        except Exception as e:
+            logger.error(f"Error retrieving agents by ids {agent_ids}: {e}")
+            raise
+        finally:
+            if session:
+                session.close()
+
+    @staticmethod
     def get_agent_config(agent_id: int) -> Optional[Dict[str, Any]]:
         """
         Get the configuration of a specific agent.

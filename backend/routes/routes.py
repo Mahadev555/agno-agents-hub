@@ -36,7 +36,7 @@ class TeamExecutionRequest(BaseModel):
     """Request to run a team with host agent coordination"""
     prompt: str = Field(..., description="The task/prompt for the team", min_length=1)
     hostAgentId: int = Field(..., description="ID of the host/coordinator agent")
-    memberAgentIds: List[int] = Field(..., description="List of member agent IDs", min_items=1)
+    memberAgentIds: List[int] = Field(..., description="List of member agent IDs", min_length=1)
 
 # Unified Chat Request (backward compatible)
 class ChatRequest(BaseModel):
@@ -66,85 +66,16 @@ class ChatResponse(BaseModel):
 router = APIRouter()
 
 
-# ======================= HELPER FUNCTIONS =======================
-
-async def validate_agent_exists(agent_id: int, is_host: bool = False) -> Dict[str, Any]:
-    """Validate that an agent exists in the database."""
-    from services.database_service import DatabaseService
-    
-    if is_host:
-        agent = DatabaseService.get_host_agent_by_id(agent_id)
-        agent_type = "Host Agent"
-    else:
-        agent = DatabaseService.get_agent_by_id(agent_id)
-        agent_type = "Agent"
-    
-    if not agent:
-        raise HTTPException(
-            status_code=404,
-            detail=f"{agent_type} with ID {agent_id} not found in database"
-        )
-    
-    logger.info(f"✅ Validated {agent_type} ID {agent_id}: {agent.get('name', 'Unknown')}")
-    return agent
-
-async def validate_and_load_agents(agent_ids: Optional[List[int]]) -> Dict[str, Any]:
-    """
-    Validate agent IDs and load their configurations from database.
-    
-    Args:
-        agent_ids: List of agent IDs to validate and load
-        
-    Returns:
-        Dict with validation status and loaded agent configs
-        
-    Raises:
-        HTTPException: If validation fails
-    """
-    if not agent_ids:
-        logger.info("No specific agent IDs provided, will use all available agents")
-        return {"valid": True, "agent_ids": None, "agents": []}
-    
-    from services.database_service import DatabaseService
-    
-    if not isinstance(agent_ids, list):
-        raise HTTPException(status_code=400, detail="agentIds must be a list of integers")
-    
-    loaded_agents = []
-    invalid_ids = []
-    
-    for agent_id in agent_ids:
-        if not isinstance(agent_id, int):
-            raise HTTPException(status_code=400, detail=f"Agent ID must be integer, got {type(agent_id)}")
-        
-        try:
-            agent = DatabaseService.get_agent_by_id(agent_id)
-            if agent:
-                loaded_agents.append(agent)
-                logger.info(f"✅ Loaded agent ID {agent_id}: {agent.get('name', 'Unknown')}")
-            else:
-                invalid_ids.append(agent_id)
-                logger.warning(f"⚠️ Agent ID {agent_id} not found in database")
-        except Exception as e:
-            logger.error(f"Error loading agent {agent_id}: {e}")
-            invalid_ids.append(agent_id)
-    
-    if invalid_ids:
-        raise HTTPException(
-            status_code=404, 
-            detail=f"Agent IDs not found: {invalid_ids}. Please check agent IDs and try again."
-        )
-    
-    return {
-        "valid": True,
-        "agent_ids": agent_ids,
-        "agents": loaded_agents
-    }
-
-
 # ======================= AGENT CRUD ROUTES =======================
+#
+# Agent existence is checked by AgentExecutionController while it loads the
+# configs it needs, so execution routes do not pre-validate. Doing both meant
+# every request read each agent row twice.
+#
+# Literal paths must stay above /api/agents/{agent_id}; otherwise FastAPI
+# matches the parameterized route first and /api/agents/mcp only works by
+# accident of int coercion failing.
 
-# Get endpoints
 @router.get("/api/agents")
 async def get_agents():
     """Get all agents"""
@@ -155,15 +86,15 @@ async def get_active_agents():
     """Get all active agents"""
     return await AgentsController.get_active_agents()
 
-@router.get("/api/agents/type/{agent_type}")
-async def get_agents_by_type(agent_type: str):
-    """Get agents by type (simple, mcp, host)"""
-    return await AgentsController.get_agents_by_type(agent_type)
-
 @router.get("/api/agents/mcp")
 async def get_mcp_agents():
     """Get all MCP agents"""
     return await AgentsController.get_agents_by_type("mcp")
+
+@router.get("/api/agents/type/{agent_type}")
+async def get_agents_by_type(agent_type: str):
+    """Get agents by type (simple, mcp, host)"""
+    return await AgentsController.get_agents_by_type(agent_type)
 
 @router.get("/api/agents/name/{name}")
 async def get_agent_by_name(name: str):
@@ -252,24 +183,13 @@ async def process_chat(chat_request: ChatRequest):
                 detail="Prompt cannot be empty. Please provide a valid task or question."
             )
         
-        # Step 2: Validate and load agents if IDs provided
-        agent_validation = await validate_and_load_agents(chat_request.agentIds)
-        
-        if not agent_validation["valid"]:
-            logger.error("❌ Agent validation failed")
-            raise HTTPException(status_code=400, detail="Agent validation failed")
-        
-        agents_loaded = agent_validation.get("agents", [])
-        if chat_request.agentIds:
-            logger.info(f"✅ Validated {len(agents_loaded)} agents successfully")
-            for agent in agents_loaded:
-                logger.info(f"   - {agent.get('name', 'Unknown')} (ID: {agent.get('agent_id')})")
-        
-        # Step 3: Execute agent task
-        logger.info("🚀 Executing agent task...")
+        # Step 2: Execute agent task. The controller loads and validates the
+        # agents as part of setting up the run.
+        logger.info("Executing agent task...")
         result = await AgentExecutionController.execute_agent_task(
             prompt=chat_request.prompt.strip(),
-            agent_ids=chat_request.agentIds
+            agent_ids=chat_request.agentIds,
+            host_agent_id=chat_request.hostAgentId,
         )
         
         # Step 4: Process and return response
@@ -328,18 +248,9 @@ async def run_single_agent(request: SingleAgentRequest):
         import time
         start_time = time.time()
         
-        logger.info("=" * 80)
-        logger.info("🎯 SINGLE AGENT EXECUTION")
-        logger.info("=" * 80)
-        logger.info(f"📋 Agent ID: {request.agentId}")
-        logger.info(f"📝 Prompt: {request.prompt[:100]}...")
-        
-        # Step 1: Validate agent exists
-        agent = await validate_agent_exists(request.agentId, is_host=False)
-        logger.info(f"✅ Agent validated: {agent.get('name', 'Unknown')}")
-        
-        # Step 2: Execute single agent
-        logger.info("🚀 Executing agent...")
+        logger.info(f"Single agent execution | agent_id={request.agentId} | "
+                    f"prompt={request.prompt[:100]}")
+
         result = await AgentExecutionController.execute_single_agent(
             prompt=request.prompt.strip(),
             agent_id=request.agentId
@@ -407,29 +318,9 @@ async def run_team(request: TeamExecutionRequest):
         import time
         start_time = time.time()
         
-        logger.info("=" * 80)
-        logger.info("👥 TEAM EXECUTION WITH HOST COORDINATION")
-        logger.info("=" * 80)
-        logger.info(f"🎯 Host Agent ID: {request.hostAgentId}")
-        logger.info(f"👤 Member Agent IDs: {request.memberAgentIds}")
-        logger.info(f"📝 Prompt: {request.prompt[:100]}...")
-        
-        # Step 1: Validate host agent exists
-        host_agent = await validate_agent_exists(request.hostAgentId, is_host=True)
-        logger.info(f"✅ Host agent validated: {host_agent.get('name', 'Unknown')}")
-        
-        # Step 2: Validate all member agents exist
-        logger.info(f"🔍 Validating {len(request.memberAgentIds)} member agents...")
-        member_agents = []
-        for agent_id in request.memberAgentIds:
-            agent = await validate_agent_exists(agent_id, is_host=False)
-            member_agents.append(agent)
-            logger.info(f"   ✅ {agent.get('name', 'Unknown')} (ID: {agent_id})")
-        
-        logger.info(f"✅ All member agents validated")
-        
-        # Step 3: Execute team with host coordination
-        logger.info("🚀 Executing team with host coordination...")
+        logger.info(f"Team execution | host={request.hostAgentId} | "
+                    f"members={request.memberAgentIds} | prompt={request.prompt[:100]}")
+
         result = await AgentExecutionController.execute_team(
             prompt=request.prompt.strip(),
             host_agent_id=request.hostAgentId,

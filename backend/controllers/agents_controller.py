@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Any
 from fastapi import HTTPException
 from services.database_service import DatabaseService
 from services.agent_service import AgentService, HostAgentService
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 
 class AgentResponse(BaseModel):
     """Response model for agent data"""
+    model_config = ConfigDict(populate_by_name=True)
+
     id: int = Field(alias="agent_id")
     name: str
     description: Optional[str] = None
@@ -29,9 +31,7 @@ class AgentResponse(BaseModel):
     config: Dict[str, Any]
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
-    
-    class Config:
-        allow_population_by_field_name = True
+
 
 class AgentCreateRequest(BaseModel):
     """Request model for creating an agent"""
@@ -55,6 +55,8 @@ class AgentUpdateRequest(BaseModel):
 
 class HostAgentResponse(BaseModel):
     """Response model for host agent data"""
+    model_config = ConfigDict(populate_by_name=True)
+
     id: int = Field(alias="agent_id")
     name: str
     description: Optional[str] = None
@@ -64,9 +66,6 @@ class HostAgentResponse(BaseModel):
     config: Dict[str, Any]
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
-    
-    class Config:
-        allow_population_by_field_name = True
 
 
 class HostAgentCreateRequest(BaseModel):
