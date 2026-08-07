@@ -1,8 +1,10 @@
-"""
-Services module for business logic operations.
-"""
+"""Service layer."""
 
+from .agent_service import AgentService, ConfigError, HostAgentService, TeamService
 from .database_service import DatabaseService
-from .agent_service import AgentService, HostAgentService
+from .run_service import RunService
 
-__all__ = ['DatabaseService', 'AgentService', 'HostAgentService']
+__all__ = [
+    "DatabaseService", "AgentService", "HostAgentService", "TeamService",
+    "ConfigError", "RunService",
+]

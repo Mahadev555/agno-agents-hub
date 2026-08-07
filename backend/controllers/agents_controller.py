@@ -7,7 +7,7 @@ import logging
 from typing import List, Dict, Optional, Any
 from fastapi import HTTPException
 from services.database_service import DatabaseService
-from services.agent_service import AgentService, HostAgentService
+from services.agent_service import AgentService, ConfigError, HostAgentService
 from pydantic import BaseModel, ConfigDict, Field
 
 logger = logging.getLogger(__name__)
@@ -139,66 +139,35 @@ class AgentsController:
     
     @staticmethod
     async def create_agent(agent_data: AgentCreateRequest) -> AgentResponse:
-        """Create a new agent"""
+        """
+        Create a new agent.
+
+        Defaults and validation live in the AgentConfig schema, so this no
+        longer hand-patches eight keys onto the config dict.
+        """
         try:
-            # Ensure config has required fields
-            config = agent_data.config or {}
-            
-            # Add instructions to config if provided
+            config = dict(agent_data.config or {})
             if agent_data.instructions:
-                config['instructions'] = agent_data.instructions
-            
-            # Ensure config has name
-            if 'name' not in config:
-                config['name'] = agent_data.name
-            
-            # Ensure config has description
-            if 'description' not in config and agent_data.description:
-                config['description'] = agent_data.description
-            
-            # Ensure model_config exists with required fields (id, type, max_tokens)
-            if 'model_config' not in config:
-                config['model_config'] = {
-                    'id': 'gemini-2.5-flash-lite',
-                    'type': 'google',
-                    'max_tokens': 4096,
-                }
-            
-            # Ensure tools array exists
-            if 'tools' not in config:
-                config['tools'] = []
-            
-            # Ensure role exists
-            if 'role' not in config:
-                config['role'] = 'Assistant'
-            
-            # Ensure markdown flag exists
-            if 'markdown' not in config:
-                config['markdown'] = True
-            
-            # Ensure show_tool_calls flag exists
-            if 'show_tool_calls' not in config:
-                config['show_tool_calls'] = True
-            
-            # Ensure additional_params exists
-            if 'additional_params' not in config:
-                config['additional_params'] = {}
-            
+                config["instructions"] = agent_data.instructions
+
             created_agent = AgentService.create_agent(
                 name=agent_data.name,
                 description=agent_data.description,
-                agent_type=agent_data.agent_type,
+                kind=agent_data.agent_type,
                 is_mcp=agent_data.is_mcp,
+                agent_type=agent_data.agent_type,
                 mcp_config=agent_data.mcp_config,
-                config=config
+                config=config,
             )
             return AgentResponse(**created_agent)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             logger.error(f"Error creating agent: {e}")
             raise HTTPException(status_code=500, detail=str(e))
-    
+
     @staticmethod
     async def update_agent(agent_id: int, agent_data: AgentUpdateRequest) -> AgentResponse:
         """Update an existing agent"""
@@ -206,6 +175,8 @@ class AgentsController:
             update_kwargs = {k: v for k, v in agent_data.dict().items() if v is not None}
             updated_agent = AgentService.update_agent(agent_id, **update_kwargs)
             return AgentResponse(**updated_agent)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
@@ -220,6 +191,9 @@ class AgentsController:
             if not deleted:
                 raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
             return {"message": f"Agent {agent_id} deleted successfully"}
+        except ConfigError as e:
+            # e.g. the agent still coordinates a team
+            raise HTTPException(status_code=409, detail=str(e))
         except HTTPException:
             raise
         except Exception as e:
@@ -267,6 +241,8 @@ class HostAgentsController:
                 config=agent_data.config
             )
             return HostAgentResponse(**created_agent)
+        except ConfigError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:

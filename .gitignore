@@ -82,3 +82,5 @@ mediafiles/
 
 
 .claude
+# Pre-migration data dumps (contain agent/run data)
+backend/backups/

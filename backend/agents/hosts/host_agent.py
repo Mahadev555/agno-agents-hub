@@ -6,18 +6,15 @@ database and it does not manage execution lifecycle; see agents/subhost/agent.py
 """
 
 import json
-import os
 from typing import Any, Dict, List, Optional
 
 from agno.agent import Agent
-from agno.models.azure import AzureOpenAI
-from agno.models.google import Gemini
-from agno.models.openai import OpenAIChat
 from agno.team import Team
-from agno.tools.duckduckgo import DuckDuckGoTools
 from agno.tools.mcp import MCPTools
 from agno.utils.log import logger
 from dotenv import load_dotenv
+
+from runtime.registry import build_model, build_tools
 
 load_dotenv()
 
@@ -48,7 +45,7 @@ def _inner_config(agent_row: Dict[str, Any]) -> Dict[str, Any]:
     """
     Pull the nested `config` blob out of a database row.
 
-    Rows are stored as {name, description, is_mcp, mcp_config, config: {...}}.
+    Rows are stored as {name, description, kind, mcp_config, config: {...}}.
     Older/hand-seeded rows sometimes flatten everything to the top level, so fall
     back to the row itself rather than raising a KeyError at execution time.
     """
@@ -94,7 +91,7 @@ async def create_dynamic_team_with_mcp(
     return Team(
         name=team_config.get("name", "Dynamic Team"),
         mode=mode,
-        model=_get_model_from_config(team_config.get("model_config", {})),
+        model=build_model(_model_settings(team_config)),
         members=agents,
         instructions=team_config.get("instructions", ""),
         **team_config.get("additional_params", {}),
@@ -104,9 +101,15 @@ async def create_dynamic_team_with_mcp(
 def build_agent(agent_row: Dict[str, Any]) -> Agent:
     """Build a single Agno Agent from a database row, MCP or simple."""
     agent_row = _as_dict(agent_row, "agent_config")
-    if agent_row.get("is_mcp", False):
-        return _create_mcp_agent(agent_row)
-    return _create_simple_agent(agent_row)
+    is_mcp = agent_row.get("kind") == "mcp" or agent_row.get("is_mcp", False)
+    try:
+        if is_mcp:
+            return _create_mcp_agent(agent_row)
+        return _create_simple_agent(agent_row)
+    except ValueError as exc:
+        # Registry rejections (unknown tool or model provider) are config
+        # problems, so surface them as build errors rather than 500s.
+        raise AgentBuildError(str(exc)) from exc
 
 
 def _create_mcp_agent(agent_row: Dict[str, Any]) -> Agent:
@@ -130,7 +133,7 @@ def _create_mcp_agent(agent_row: Dict[str, Any]) -> Agent:
     return Agent(
         name=inner.get("name", agent_row.get("name", "MCP Agent")),
         role=inner.get("role", "Assistant"),
-        model=_get_model_from_config(inner.get("model_config", {})),
+        model=build_model(_model_settings(inner)),
         tools=[mcp_tools],
         description=inner.get("description", "MCP-enabled agent"),
         instructions=inner.get("instructions", ""),
@@ -147,8 +150,8 @@ def _create_simple_agent(agent_row: Dict[str, Any]) -> Agent:
     return Agent(
         name=inner.get("name", agent_row.get("name", "Simple Agent")),
         role=inner.get("role", "Assistant"),
-        model=_get_model_from_config(inner.get("model_config", {})),
-        tools=_get_tools_from_config(inner.get("tools", [])),
+        model=build_model(_model_settings(inner)),
+        tools=build_tools(inner.get("tools", [])),
         description=inner.get("description", ""),
         instructions=inner.get("instructions", ""),
         markdown=inner.get("markdown", True),
@@ -157,51 +160,6 @@ def _create_simple_agent(agent_row: Dict[str, Any]) -> Agent:
     )
 
 
-def _get_model_from_config(model_config: Dict[str, Any]):
-    """Create a model instance from configuration, defaulting to Gemini."""
-    model_config = model_config or {}
-    model_type = model_config.get("type", "google")
-    model_id = model_config.get("id", DEFAULT_MODEL_ID)
-    max_tokens = model_config.get("max_tokens")
-    extra = model_config.get("additional_params", {})
-
-    if model_type == "azure":
-        return AzureOpenAI(
-            id=model_id if model_id.startswith("gpt") else "gpt-4o",
-            max_tokens=max_tokens or 16384,
-            api_version=model_config.get("api_version") or os.getenv("AZURE_OPENAI_API_VERSION"),
-            **extra,
-        )
-
-    if model_type == "openai":
-        return OpenAIChat(id=model_id, max_tokens=max_tokens, **extra)
-
-    if model_type != "google":
-        logger.warning(f"Unknown model type '{model_type}'; falling back to google/{DEFAULT_MODEL_ID}")
-        model_id = DEFAULT_MODEL_ID
-
-    # Gemini names the cap max_output_tokens, not max_tokens.
-    if max_tokens:
-        return Gemini(id=model_id, max_output_tokens=max_tokens, **extra)
-    return Gemini(id=model_id, **extra)
-
-
-# Tool name -> zero-arg factory. Factories (not instances) so each agent gets a
-# fresh tool object instead of sharing one across every agent in the process.
-TOOL_REGISTRY = {
-    "duckduckgo": DuckDuckGoTools,
-}
-
-
-def _get_tools_from_config(tool_names: Optional[List[str]]) -> List:
-    """Map configured tool names to instances, failing loudly on unknown names."""
-    if not tool_names:
-        return []
-
-    unknown = [name for name in tool_names if name not in TOOL_REGISTRY]
-    if unknown:
-        raise AgentBuildError(
-            f"Unknown tool(s) {unknown}. Registered tools: {sorted(TOOL_REGISTRY)}"
-        )
-
-    return [TOOL_REGISTRY[name]() for name in tool_names]
+def _model_settings(blob: Dict[str, Any]) -> Dict[str, Any]:
+    """Read the LLM section, accepting the legacy `model_config` key."""
+    return blob.get("model") or blob.get("model_config") or {}

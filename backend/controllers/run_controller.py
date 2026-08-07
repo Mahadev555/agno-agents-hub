@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from agents.subhost.agent import stream_agent_task
 from controllers.agent_execution_controller import AgentExecutionController
+from controllers.team_controller import TeamsController
 from models.run import RunStatus
 from services.run_bus import run_bus
 from services.run_service import RunService
@@ -36,9 +37,13 @@ class RunController:
         prompt: str,
         agent_ids: Optional[List[int]] = None,
         host_agent_id: Optional[int] = None,
+        team_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Validate the request, persist a pending run, and schedule execution.
+
+        Composition comes from a saved team when team_id is given, otherwise
+        from the ad-hoc agent_ids/host_agent_id pair.
 
         Returns immediately with the run record; the caller subscribes to
         /api/runs/{run_id}/events for progress.
@@ -49,15 +54,22 @@ class RunController:
 
         # Resolve configs up front so a bad agent id is a synchronous 404
         # instead of an error the client only discovers over the event stream.
-        agents = AgentExecutionController._load_agents(agent_ids)
-        mode = "single" if (len(agents) == 1 and host_agent_id is None) else "team"
+        if team_id is not None:
+            resolved = TeamsController.resolve_for_run(team_id)
+            agents = resolved["agents"]
+            host_agent_id = resolved["host_agent_id"]
+            host_config = resolved["host_config"]
+            mode = "team"
+        else:
+            agents = AgentExecutionController._load_agents(agent_ids)
+            mode = "single" if (len(agents) == 1 and host_agent_id is None) else "team"
 
-        host_config = None
-        if mode == "team":
-            if host_agent_id is None:
-                host_agent = AgentExecutionController._default_host_agent()
-                host_agent_id = host_agent["agent_id"]
-            host_config = AgentExecutionController._load_host_config(host_agent_id)
+            host_config = None
+            if mode == "team":
+                if host_agent_id is None:
+                    host_agent = AgentExecutionController._default_host_agent()
+                    host_agent_id = host_agent["agent_id"]
+                host_config = AgentExecutionController._load_host_config(host_agent_id)
 
         record = RunService.create(
             prompt=prompt,

@@ -88,16 +88,18 @@ def init_db(recreate_tables=False):
         with engine.connect() as conn:
             logger.info("[OK] Database connection successful")
         
-        # Drop existing tables if requested (useful for schema changes)
         if recreate_tables:
-            logger.info("Dropping existing tables...")
+            logger.warning("Dropping existing tables...")
             Base.metadata.drop_all(bind=engine)
-            logger.info("[OK] Tables dropped")
-        
-        # Create all tables
-        logger.info("Creating database tables...")
-        Base.metadata.create_all(bind=engine)
-        logger.info("[OK] Database initialized successfully")
+            logger.warning("[OK] Tables dropped")
+            Base.metadata.create_all(bind=engine)
+            logger.info("[OK] Tables recreated")
+            return
+
+        # Schema is owned by Alembic. create_all() cannot ALTER existing tables,
+        # so relying on it would silently skip column changes and drift from the
+        # migration history. Run: python -m alembic upgrade head
+        logger.info("[OK] Database reachable (schema managed by Alembic)")
         
     except OperationalError as e:
         logger.error(f"[ERROR] Database connection failed: {str(e)}")

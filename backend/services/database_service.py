@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from connection import get_session
-from models.agent import Agent, HostAgent
+from models.agent import Agent, AgentKind
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +170,9 @@ class DatabaseService:
         session: Session = None
         try:
             session = get_session()
-            agents = session.query(Agent).filter(Agent.is_active == True).order_by(Agent.agent_id).all()
+            agents = (session.query(Agent)
+                      .filter(Agent.is_active == True, Agent.kind.in_(AgentKind.WORKERS))
+                      .order_by(Agent.agent_id).all())
             result = [agent.to_dict() for agent in agents]
             logger.info(f"Retrieved {len(result)} active agents from database")
             return result
@@ -199,7 +201,7 @@ class DatabaseService:
         try:
             session = get_session()
             agents = session.query(Agent).filter(
-                Agent.agent_type == agent_type,
+                Agent.kind == agent_type,
                 Agent.is_active == True
             ).order_by(Agent.agent_id).all()
             result = [agent.to_dict() for agent in agents]
@@ -238,8 +240,10 @@ class DatabaseService:
         session: Session = None
         try:
             session = get_session()
-            host_agents = session.query(HostAgent).order_by(HostAgent.agent_id).all()
-            result = [host_agent.to_dict() for host_agent in host_agents]
+            host_agents = (session.query(Agent)
+                           .filter(Agent.kind == AgentKind.HOST)
+                           .order_by(Agent.agent_id).all())
+            result = [host_agent.to_host_dict() for host_agent in host_agents]
             logger.info(f"Retrieved {len(result)} host agents from database")
             return result
         except Exception as e:
@@ -266,11 +270,13 @@ class DatabaseService:
         session: Session = None
         try:
             session = get_session()
-            host_agent = session.query(HostAgent).filter(HostAgent.agent_id == agent_id).first()
+            host_agent = (session.query(Agent)
+                          .filter(Agent.agent_id == agent_id, Agent.kind == AgentKind.HOST)
+                          .first())
             
             if host_agent:
                 logger.info(f"Retrieved host agent with ID {agent_id}")
-                return host_agent.to_dict()
+                return host_agent.to_host_dict()
             else:
                 logger.warning(f"Host agent with ID {agent_id} not found")
                 return None
@@ -299,13 +305,13 @@ class DatabaseService:
         session: Session = None
         try:
             session = get_session()
-            host_agent = session.query(HostAgent).filter(
-                HostAgent.name.ilike(name)
+            host_agent = session.query(Agent).filter(
+                Agent.name.ilike(name), Agent.kind == AgentKind.HOST
             ).first()
             
             if host_agent:
                 logger.info(f"Retrieved host agent with name '{name}'")
-                return host_agent.to_dict()
+                return host_agent.to_host_dict()
             else:
                 logger.warning(f"Host agent with name '{name}' not found")
                 return None

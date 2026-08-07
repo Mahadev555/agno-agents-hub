@@ -78,3 +78,4 @@ uv==0.7.12
 uvicorn==0.34.3
 xxhash==3.5.0
 zstandard==0.23.0
+alembic==1.19.0

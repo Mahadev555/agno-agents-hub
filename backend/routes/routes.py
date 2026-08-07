@@ -16,6 +16,11 @@ from controllers.agents_controller import (
     HostAgentsController,
 )
 from controllers.run_controller import RunController
+from controllers.team_controller import (
+    TeamCreateRequest,
+    TeamsController,
+    TeamUpdateRequest,
+)
 from services.run_bus import run_bus
 
 logger = logging.getLogger(__name__)
@@ -368,11 +373,17 @@ async def run_team(request: TeamExecutionRequest):
 
 # ======================= RUN ROUTES (streaming) =======================
 
+class TeamRunRequest(BaseModel):
+    """Run a saved team."""
+    prompt: str = Field(..., description="The task to execute", min_length=1)
+
+
 class RunCreateRequest(BaseModel):
     """Start a run. One agent runs alone; several are coordinated by a host."""
     prompt: str = Field(..., description="The task to execute", min_length=1)
     agentIds: Optional[List[int]] = Field(None, description="Agent IDs to use")
     hostAgentId: Optional[int] = Field(None, description="Coordinator for team mode")
+    teamId: Optional[int] = Field(None, description="Run a saved team by id")
 
 
 @router.post("/api/runs", status_code=202)
@@ -388,6 +399,7 @@ async def create_run(request: RunCreateRequest):
         prompt=request.prompt,
         agent_ids=request.agentIds,
         host_agent_id=request.hostAgentId,
+        team_id=request.teamId,
     )
 
 
@@ -462,3 +474,44 @@ async def stream_run_events(run_id: str, request: Request):
 def _sse(payload: Dict[str, Any]) -> str:
     """Encode one event in the SSE wire format."""
     return f"data: {json.dumps(payload)}\n\n"
+
+
+# ======================= TEAM ROUTES =======================
+#
+# Teams persist composition, so a group of agents can be named, reused, and
+# shared instead of being re-specified by the client on every request.
+
+@router.get("/api/teams")
+async def list_teams():
+    """List all teams with their members."""
+    return await TeamsController.list_teams()
+
+
+@router.post("/api/teams", status_code=201)
+async def create_team(payload: TeamCreateRequest):
+    """Create a reusable team."""
+    return await TeamsController.create_team(payload)
+
+
+@router.get("/api/teams/{team_id}")
+async def get_team(team_id: int):
+    """Fetch a team by id."""
+    return await TeamsController.get_team(team_id)
+
+
+@router.put("/api/teams/{team_id}")
+async def update_team(team_id: int, payload: TeamUpdateRequest):
+    """Update a team. Supplying memberAgentIds replaces membership entirely."""
+    return await TeamsController.update_team(team_id, payload)
+
+
+@router.delete("/api/teams/{team_id}")
+async def delete_team(team_id: int):
+    """Delete a team. Membership rows cascade; the agents themselves remain."""
+    return await TeamsController.delete_team(team_id)
+
+
+@router.post("/api/teams/{team_id}/runs", status_code=202)
+async def run_team(team_id: int, request: TeamRunRequest):
+    """Start a run using a saved team's coordinator and membership."""
+    return RunController.start(prompt=request.prompt, team_id=team_id)
