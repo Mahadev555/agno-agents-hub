@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Trash2, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
-import { agentService } from '../services/api'
+import { agentService, runService } from '../services/api'
 import Button from './Button'
 
 const ChatPlayground = () => {
@@ -16,8 +16,14 @@ const ChatPlayground = () => {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  const [toolActivity, setToolActivity] = useState(null)
   const [error, setError] = useState(null)
   const messagesEndRef = useRef(null)
+  const streamingIdRef = useRef(null)
+  const cancelStreamRef = useRef(null)
+
+  // Close any open stream if the user navigates away mid-run.
+  useEffect(() => () => cancelStreamRef.current?.(), [])
 
   useEffect(() => {
     const initializeChat = async () => {
@@ -102,44 +108,100 @@ const ChatPlayground = () => {
     }])
   }
 
-  const handleExecuteSingle = async () => {
-    if (!input.trim() || !selectedAgent) return
+  // Append streamed text to the in-progress agent message.
+  const appendToStreaming = (text) => {
+    setMessages(prev => prev.map(msg =>
+      msg.id === streamingIdRef.current ? { ...msg, text: msg.text + text } : msg
+    ))
+  }
 
+  const finalizeStreaming = (finalText) => {
+    setMessages(prev => prev.map(msg =>
+      msg.id === streamingIdRef.current
+        ? { ...msg, text: finalText ?? msg.text, streaming: false }
+        : msg
+    ))
+    streamingIdRef.current = null
+  }
+
+  /**
+   * Start a run and render its output as it streams.
+   *
+   * Both modes share this path: one agent runs alone, several are coordinated
+   * by the selected host agent.
+   */
+  const executeRun = async ({ agentIds, hostAgentId }) => {
     addMessage(input, 'user')
+    const prompt = input
     setInput('')
     setLoading(true)
     setError(null)
+    setToolActivity(null)
+
+    // Placeholder that streamed tokens flow into.
+    const placeholderId = `stream-${Date.now()}`
+    streamingIdRef.current = placeholderId
+    setMessages(prev => [...prev, {
+      id: placeholderId,
+      text: '',
+      role: 'agent',
+      streaming: true,
+      timestamp: new Date(),
+    }])
 
     try {
-      const response = await agentService.executeSingleAgent(selectedAgent, input)
-      addMessage(response.response || 'No response', 'agent')
+      const run = await runService.start(prompt, { agentIds, hostAgentId })
+
+      await new Promise((resolve) => {
+        cancelStreamRef.current = runService.stream(run.run_id, {
+          onEvent: (event) => {
+            if (event.type === 'token') {
+              appendToStreaming(event.text)
+            } else if (event.type === 'tool_call') {
+              setToolActivity(
+                event.status === 'started' ? `Using ${event.name}...` : null
+              )
+            }
+          },
+          onDone: (event) => {
+            // Prefer the server's assembled output over locally concatenated
+            // tokens; they agree, but the server value is authoritative.
+            finalizeStreaming(event.output)
+            setToolActivity(null)
+            resolve()
+          },
+          onError: (err) => {
+            finalizeStreaming()
+            setMessages(prev => prev.filter(
+              msg => !(msg.id === placeholderId && !msg.text)
+            ))
+            setError(err.message)
+            addMessage('Error: ' + err.message, 'error')
+            setToolActivity(null)
+            resolve()
+          },
+        })
+      })
     } catch (err) {
-      // err.message carries the API's `detail`, e.g. "Unknown tool(s) [...]"
-      // or "Could not connect to an MCP server...".
+      // Failed before the stream existed (bad agent id, empty prompt, API down).
+      finalizeStreaming()
+      setMessages(prev => prev.filter(msg => msg.id !== placeholderId))
       setError(err.message)
       addMessage('Error: ' + err.message, 'error')
     } finally {
+      cancelStreamRef.current = null
       setLoading(false)
     }
   }
 
+  const handleExecuteSingle = async () => {
+    if (!input.trim() || !selectedAgent) return
+    await executeRun({ agentIds: [selectedAgent], hostAgentId: null })
+  }
+
   const handleExecuteTeam = async () => {
     if (!input.trim() || !selectedHostAgent || selectedMembers.length === 0) return
-
-    addMessage(input, 'user')
-    setInput('')
-    setLoading(true)
-    setError(null)
-
-    try {
-      const response = await agentService.executeTeam(selectedHostAgent, selectedMembers, input)
-      addMessage(response.response || 'Team execution complete', 'agent')
-    } catch (err) {
-      setError(err.message)
-      addMessage('Error: ' + err.message, 'error')
-    } finally {
-      setLoading(false)
-    }
+    await executeRun({ agentIds: selectedMembers, hostAgentId: selectedHostAgent })
   }
 
   const toggleMember = (agentId) => {
@@ -287,7 +349,7 @@ const ChatPlayground = () => {
               </div>
             </motion.div>
           ))}
-          {loading && (
+          {loading && !messages.some(m => m.streaming && m.text) && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -296,7 +358,8 @@ const ChatPlayground = () => {
             >
               <div className="bg-slate-200 text-slate-900 px-4 py-3 rounded-lg flex items-center gap-2">
                 <span className="text-sm font-medium">
-                  {executionMode === 'team' ? 'Coordinating team' : 'Running agent'}
+                  {toolActivity ||
+                    (executionMode === 'team' ? 'Coordinating team' : 'Running agent')}
                   {elapsed > 0 ? ` · ${elapsed}s` : ''}
                 </span>
                 <motion.div

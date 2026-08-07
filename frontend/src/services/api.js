@@ -136,4 +136,77 @@ export const agentService = {
   },
 }
 
+/**
+ * Streaming run API.
+ *
+ * Preferred over the blocking execute* calls: the server keeps working even if
+ * this client goes away, and output arrives token by token instead of after a
+ * multi-minute silence.
+ */
+export const runService = {
+  // Returns the pending run record immediately; work continues server-side.
+  start: async (prompt, { agentIds = [], hostAgentId = null } = {}) => {
+    const payload = { prompt }
+    if (agentIds.length > 0) payload.agentIds = agentIds.map(Number)
+    if (hostAgentId) payload.hostAgentId = Number(hostAgentId)
+
+    const response = await api.post('/api/runs', payload)
+    return response.data
+  },
+
+  get: async (runId) => {
+    const response = await api.get(`/api/runs/${runId}`)
+    return response.data
+  },
+
+  list: async (limit = 50) => {
+    const response = await api.get('/api/runs', { params: { limit } })
+    return response.data || []
+  },
+
+  /**
+   * Subscribe to a run's events.
+   *
+   * The server replays everything already emitted before going live, so
+   * subscribing a moment after start() still yields the full output.
+   *
+   * @returns {() => void} cancel function that closes the stream.
+   */
+  stream: (runId, { onEvent, onDone, onError } = {}) => {
+    const source = new EventSource(`${API_BASE_URL}/api/runs/${runId}/events`)
+    let settled = false
+
+    const finish = (fn, arg) => {
+      if (settled) return
+      settled = true
+      source.close()
+      fn?.(arg)
+    }
+
+    source.onmessage = (message) => {
+      let event
+      try {
+        event = JSON.parse(message.data)
+      } catch {
+        return
+      }
+
+      onEvent?.(event)
+
+      // Terminal events are always last. Close explicitly, otherwise
+      // EventSource reconnects and replays the whole run.
+      if (event.type === 'completed') finish(onDone, event)
+      else if (event.type === 'error') finish(onError, new Error(event.message))
+    }
+
+    source.onerror = () => {
+      // Fires on network drop, and also on normal server-side close if we did
+      // not already settle.
+      finish(onError, new Error('Connection to the run stream was lost'))
+    }
+
+    return () => finish(() => {})
+  },
+}
+
 export default api
