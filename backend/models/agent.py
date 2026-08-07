@@ -52,6 +52,15 @@ class Agent(Base):
 
     is_active = Column(Boolean, default=True, index=True)
 
+    # Ownership. Nullable so the migration can adopt pre-auth rows, but every
+    # row created through the API has an owner.
+    owner_id = Column(
+        Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # Marketplace visibility: public agents are readable (never writable) by
+    # anyone signed in.
+    is_public = Column(Boolean, nullable=False, default=False, index=True)
+
     mcp_config = Column(JSONB, nullable=True, default=dict)
     config = Column(JSONB, nullable=False, default=dict)
 
@@ -78,6 +87,8 @@ class Agent(Base):
             "agent_type": self.kind,
             "is_mcp": self.is_mcp,
             "is_active": self.is_active,
+            "owner_id": self.owner_id,
+            "is_public": self.is_public,
             "mcp_config": self.mcp_config,
             "config": self.config,
             "created_at": self.created_at.isoformat() if self.created_at else None,
@@ -125,6 +136,11 @@ class Team(Base):
     is_active = Column(Boolean, default=True, index=True)
     config = Column(JSONB, nullable=False, default=dict)
 
+    owner_id = Column(
+        Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    is_public = Column(Boolean, nullable=False, default=False, index=True)
+
     created_at = Column(DateTime, default=utcnow, index=True)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow)
 
@@ -145,6 +161,8 @@ class Team(Base):
             "host_agent_id": self.host_agent_id,
             "mode": self.mode,
             "is_active": self.is_active,
+            "owner_id": self.owner_id,
+            "is_public": self.is_public,
             "config": self.config,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,

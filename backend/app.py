@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from routes.routes import router
 from connection import init_db
+from config import get_settings
 from logging_config import configure_logging
 from services.run_service import RunService
 import logging
@@ -15,24 +16,21 @@ from contextlib import asynccontextmanager
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 client_build_dir = os.path.join(BACKEND_DIR, "static")
 
-# Comma-separated list of allowed browser origins.
-# "*" is only honoured when credentials are disabled, because the CORS spec
-# forbids a wildcard origin on credentialed requests.
-ALLOWED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",")
-    if origin.strip()
-]
-ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "true").lower() == "true"
-if "*" in ALLOWED_ORIGINS:
-    ALLOW_CREDENTIALS = False
+# Settings are validated once at import; a bad value fails here rather than at
+# the moment it is first needed.
+settings = get_settings()
+ALLOWED_ORIGINS = settings.cors_origins
+ALLOW_CREDENTIALS = settings.allow_credentials
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
     log = logging.getLogger("agno_hub")
 
-    log.info("Starting agno_hub Hub API...")
+    log.info(f"Starting agno_hub Hub API (env={settings.environment})...")
+    # Fail fast in production rather than issuing tokens signed with an
+    # ephemeral key that changes on every deploy.
+    settings.resolved_jwt_secret()
     try:
         init_db()
         # Runs execute in-process, so anything left mid-flight by a previous

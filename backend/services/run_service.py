@@ -25,6 +25,7 @@ class RunService:
         mode: str,
         agent_ids: List[int],
         host_agent_id: Optional[int] = None,
+        owner_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Insert a pending run and return it."""
         run_id = str(uuid.uuid4())
@@ -36,6 +37,7 @@ class RunService:
                 prompt=prompt,
                 agent_ids=agent_ids,
                 host_agent_id=host_agent_id,
+                owner_id=owner_id,
             )
             session.add(run)
             session.flush()
@@ -95,10 +97,16 @@ class RunService:
             return run.to_dict() if run else None
 
     @staticmethod
-    def list_recent(limit: int = 50, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Fetch recent runs, newest first."""
+    def list_recent(
+        limit: int = 50,
+        status: Optional[str] = None,
+        owner_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch recent runs, newest first, optionally scoped to one owner."""
         with session_scope() as session:
             query = session.query(Run)
+            if owner_id is not None:
+                query = query.filter(Run.owner_id == owner_id)
             if status:
                 query = query.filter(Run.status == status)
             runs = query.order_by(Run.created_at.desc()).limit(limit).all()

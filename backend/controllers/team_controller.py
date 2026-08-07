@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, Field
 
+from dependencies import can_read, require_owner
 from services.agent_service import ConfigError, TeamService
 from services.database_service import DatabaseService
 
@@ -28,6 +29,7 @@ class TeamCreateRequest(BaseModel):
     memberAgentIds: List[int] = Field(..., min_length=1)
     mode: str = Field(default="coordinate")
     config: Optional[Dict[str, Any]] = None
+    is_public: Optional[bool] = False
 
 
 class TeamUpdateRequest(BaseModel):
@@ -45,21 +47,21 @@ class TeamsController:
     """Handles team management operations."""
 
     @staticmethod
-    async def list_teams() -> List[Dict[str, Any]]:
-        """List every team with its members."""
-        return TeamService.list_teams()
+    async def list_teams(user: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """List teams the caller may see."""
+        return [t for t in TeamService.list_teams() if can_read(t, user)]
 
     @staticmethod
-    async def get_team(team_id: int) -> Dict[str, Any]:
-        """Fetch one team, 404ing if unknown."""
+    async def get_team(team_id: int, user: Dict[str, Any]) -> Dict[str, Any]:
+        """Fetch one team the caller may see."""
         team = TeamService.get_team(team_id)
-        if not team:
+        if not team or not can_read(team, user):
             raise HTTPException(status_code=404, detail=f"Team {team_id} not found")
         return team
 
     @staticmethod
-    async def create_team(payload: TeamCreateRequest) -> Dict[str, Any]:
-        """Create a team."""
+    async def create_team(payload: TeamCreateRequest, user: Dict[str, Any]) -> Dict[str, Any]:
+        """Create a team owned by the caller."""
         try:
             return TeamService.create_team(
                 name=payload.name,
@@ -68,13 +70,22 @@ class TeamsController:
                 member_agent_ids=payload.memberAgentIds,
                 mode=payload.mode,
                 config=payload.config,
+                owner_id=user["user_id"],
+                is_public=bool(payload.is_public),
             )
         except ConfigError as e:
             raise HTTPException(status_code=400, detail=str(e))
 
     @staticmethod
-    async def update_team(team_id: int, payload: TeamUpdateRequest) -> Dict[str, Any]:
-        """Update a team."""
+    async def update_team(
+        team_id: int, payload: TeamUpdateRequest, user: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Update a team the caller owns."""
+        existing = TeamService.get_team(team_id)
+        if not existing or not can_read(existing, user):
+            raise HTTPException(status_code=404, detail=f"Team {team_id} not found")
+        require_owner(existing, user, "team")
+
         try:
             return TeamService.update_team(
                 team_id=team_id,
@@ -91,22 +102,28 @@ class TeamsController:
             raise HTTPException(status_code=status, detail=str(e))
 
     @staticmethod
-    async def delete_team(team_id: int) -> Dict[str, str]:
-        """Delete a team."""
+    async def delete_team(team_id: int, user: Dict[str, Any]) -> Dict[str, str]:
+        """Delete a team the caller owns."""
+        existing = TeamService.get_team(team_id)
+        if not existing or not can_read(existing, user):
+            raise HTTPException(status_code=404, detail=f"Team {team_id} not found")
+        require_owner(existing, user, "team")
+
         if not TeamService.delete_team(team_id):
             raise HTTPException(status_code=404, detail=f"Team {team_id} not found")
         return {"message": f"Team {team_id} deleted successfully"}
 
     @staticmethod
-    def resolve_for_run(team_id: int) -> Dict[str, Any]:
+    def resolve_for_run(team_id: int, user: Dict[str, Any]) -> Dict[str, Any]:
         """
         Load everything needed to execute a team.
 
         Returns the host config (with the team's mode applied) and the member
-        agent rows in their stored order.
+        agent rows in their stored order. Running a team only needs read access,
+        so a public team can be used by anyone signed in.
         """
         team = TeamService.get_team(team_id)
-        if not team:
+        if not team or not can_read(team, user):
             raise HTTPException(status_code=404, detail=f"Team {team_id} not found")
         if not team.get("is_active", True):
             raise HTTPException(status_code=400, detail=f"Team {team_id} is inactive")

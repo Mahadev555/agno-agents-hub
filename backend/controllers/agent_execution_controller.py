@@ -37,6 +37,7 @@ async def _recorded(
     agent_ids: List[int],
     host_agent_id: Optional[int],
     coro_factory,
+    owner_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Run a non-streaming execution while persisting a run record around it.
@@ -46,7 +47,11 @@ async def _recorded(
     so logs from both paths correlate the same way.
     """
     record = RunService.create(
-        prompt=prompt, mode=mode, agent_ids=agent_ids, host_agent_id=host_agent_id
+        prompt=prompt,
+        mode=mode,
+        agent_ids=agent_ids,
+        host_agent_id=host_agent_id,
+        owner_id=owner_id,
     )
     run_id = record["run_id"]
     RunService.mark_running(run_id)
@@ -132,7 +137,9 @@ class AgentExecutionController:
         return config
 
     @staticmethod
-    async def execute_single_agent(prompt: str, agent_id: int) -> Dict[str, Any]:
+    async def execute_single_agent(
+        prompt: str, agent_id: int, owner_id: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Execute one agent directly, with no team wrapper."""
         agents = AgentExecutionController._load_agents([agent_id])
 
@@ -154,6 +161,7 @@ class AgentExecutionController:
             agent_ids=[agent_id],
             host_agent_id=None,
             coro_factory=_run,
+            owner_id=owner_id,
         )
 
     @staticmethod
@@ -161,6 +169,7 @@ class AgentExecutionController:
         prompt: str,
         host_agent_id: int,
         member_agent_ids: List[int],
+        owner_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Execute a team coordinated by a host agent."""
         host_config = AgentExecutionController._load_host_config(host_agent_id)
@@ -185,6 +194,7 @@ class AgentExecutionController:
             agent_ids=member_agent_ids,
             host_agent_id=host_agent_id,
             coro_factory=_run,
+            owner_id=owner_id,
         )
         result["host_agent_id"] = host_agent_id
         return result
@@ -194,6 +204,7 @@ class AgentExecutionController:
         prompt: str,
         agent_ids: Optional[List[int]] = None,
         host_agent_id: Optional[int] = None,
+        owner_id: Optional[int] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -206,7 +217,7 @@ class AgentExecutionController:
 
         if len(agents) == 1 and host_agent_id is None:
             return await AgentExecutionController.execute_single_agent(
-                prompt=prompt, agent_id=agents[0]["agent_id"]
+                prompt=prompt, agent_id=agents[0]["agent_id"], owner_id=owner_id
             )
 
         if host_agent_id is None:
@@ -216,4 +227,5 @@ class AgentExecutionController:
             prompt=prompt,
             host_agent_id=host_agent_id,
             member_agent_ids=[a["agent_id"] for a in agents],
+            owner_id=owner_id,
         )

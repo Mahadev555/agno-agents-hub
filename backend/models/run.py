@@ -7,7 +7,7 @@ Everything downstream (history UI, retries, cancellation, cost reporting) reads
 from here.
 """
 
-from sqlalchemy import Column, DateTime, Integer, String, Text
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 
 from models.base import Base, utcnow
@@ -41,6 +41,11 @@ class Run(Base):
     agent_ids = Column(JSONB, nullable=False, default=list)
     host_agent_id = Column(Integer, nullable=True)
 
+    # Who spent the tokens. Drives history scoping and per-user rate limits.
+    owner_id = Column(
+        Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
     # Usage, for cost attribution. Null when the provider does not report it.
     input_tokens = Column(Integer, nullable=True)
     output_tokens = Column(Integer, nullable=True)
@@ -62,6 +67,7 @@ class Run(Base):
             "error": self.error,
             "agent_ids": self.agent_ids or [],
             "host_agent_id": self.host_agent_id,
+            "owner_id": self.owner_id,
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.total_tokens,

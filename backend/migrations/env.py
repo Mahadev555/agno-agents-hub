@@ -24,6 +24,7 @@ load_dotenv()
 from models.base import Base  # noqa: E402
 from models import agent as _agent_models  # noqa: E402,F401
 from models import run as _run_models  # noqa: E402,F401
+from models import user as _user_models  # noqa: E402,F401
 
 config = context.config
 

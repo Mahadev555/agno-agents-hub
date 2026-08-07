@@ -18,7 +18,9 @@ from fastapi import HTTPException
 from agents.subhost.agent import stream_agent_task
 from controllers.agent_execution_controller import AgentExecutionController
 from controllers.team_controller import TeamsController
+from dependencies import can_read
 from models.run import RunStatus
+from services import rate_limit
 from services.run_bus import run_bus
 from services.run_service import RunService
 
@@ -35,6 +37,7 @@ class RunController:
     @staticmethod
     def start(
         prompt: str,
+        user: Dict[str, Any],
         agent_ids: Optional[List[int]] = None,
         host_agent_id: Optional[int] = None,
         team_id: Optional[int] = None,
@@ -52,16 +55,38 @@ class RunController:
         if not prompt:
             raise HTTPException(status_code=400, detail="Prompt cannot be empty")
 
+        user_id = user["user_id"]
+
+        # Limits are checked before any work is scheduled, so an over-quota
+        # request costs nothing.
+        try:
+            rate_limit.enforce(user_id)
+        except rate_limit.RateLimitExceeded as exc:
+            raise HTTPException(
+                status_code=429,
+                detail=str(exc),
+                headers={"Retry-After": str(exc.retry_after)},
+            )
+
         # Resolve configs up front so a bad agent id is a synchronous 404
         # instead of an error the client only discovers over the event stream.
         if team_id is not None:
-            resolved = TeamsController.resolve_for_run(team_id)
+            resolved = TeamsController.resolve_for_run(team_id, user)
             agents = resolved["agents"]
             host_agent_id = resolved["host_agent_id"]
             host_config = resolved["host_config"]
             mode = "team"
         else:
             agents = AgentExecutionController._load_agents(agent_ids)
+
+            # Running an agent requires read access to it; without this a user
+            # could execute someone else's private agent by guessing its id.
+            hidden = [a["agent_id"] for a in agents if not can_read(a, user)]
+            if hidden:
+                raise HTTPException(
+                    status_code=404, detail=f"Agent IDs not found: {hidden}"
+                )
+
             mode = "single" if (len(agents) == 1 and host_agent_id is None) else "team"
 
             host_config = None
@@ -69,6 +94,11 @@ class RunController:
                 if host_agent_id is None:
                     host_agent = AgentExecutionController._default_host_agent()
                     host_agent_id = host_agent["agent_id"]
+                host_agent = AgentExecutionController._load_agents([host_agent_id])[0]
+                if not can_read(host_agent, user):
+                    raise HTTPException(
+                        status_code=404, detail=f"Host agent {host_agent_id} not found"
+                    )
                 host_config = AgentExecutionController._load_host_config(host_agent_id)
 
         record = RunService.create(
@@ -76,6 +106,7 @@ class RunController:
             mode=mode,
             agent_ids=[a["agent_id"] for a in agents],
             host_agent_id=host_agent_id if mode == "team" else None,
+            owner_id=user_id,
         )
         run_id = record["run_id"]
 
@@ -83,6 +114,7 @@ class RunController:
         # the beginning of the stream.
         run_bus.open(run_id)
 
+        rate_limit.acquire(user_id)
         task = asyncio.create_task(
             RunController._execute(
                 run_id=run_id,
@@ -90,6 +122,7 @@ class RunController:
                 agent_configs=agents,
                 host_config=host_config,
                 execution_mode=mode,
+                user_id=user_id,
             )
         )
         _active_tasks.add(task)
@@ -104,6 +137,7 @@ class RunController:
         agent_configs: List[Dict[str, Any]],
         host_config: Optional[Dict[str, Any]],
         execution_mode: str,
+        user_id: int,
     ) -> None:
         """Drive the run to a terminal state, publishing events as it goes."""
         channel = run_bus.open(run_id)
@@ -149,16 +183,30 @@ class RunController:
                 usage=usage,
             )
             channel.close()
+            rate_limit.release(user_id)
 
     @staticmethod
-    def get(run_id: str) -> Dict[str, Any]:
-        """Fetch a run record, 404ing if unknown."""
+    def get(run_id: str, user: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Fetch a run record.
+
+        Runs are private to the account that started them; another user's run
+        is reported as missing rather than forbidden.
+        """
         record = RunService.get(run_id)
         if not record:
             raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+        owner_id = record.get("owner_id")
+        if not user.get("is_admin") and owner_id is not None and owner_id != user["user_id"]:
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
         return record
 
     @staticmethod
-    def list_recent(limit: int = 50, status: Optional[str] = None) -> List[Dict[str, Any]]:
-        """List recent runs, newest first."""
-        return RunService.list_recent(limit=limit, status=status)
+    def list_recent(
+        user: Dict[str, Any], limit: int = 50, status: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """List the caller's recent runs, newest first."""
+        owner_id = None if user.get("is_admin") else user["user_id"]
+        return RunService.list_recent(limit=limit, status=status, owner_id=owner_id)

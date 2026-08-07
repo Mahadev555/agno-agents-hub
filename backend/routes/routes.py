@@ -3,11 +3,17 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from controllers.agent_execution_controller import AgentExecutionController
+from controllers.auth_controller import (
+    AuthController,
+    LoginRequest,
+    RegisterRequest,
+    TokenResponse,
+)
 from controllers.agents_controller import (
     AgentCreateRequest,
     AgentsController,
@@ -21,6 +27,7 @@ from controllers.team_controller import (
     TeamsController,
     TeamUpdateRequest,
 )
+from dependencies import get_current_user, get_current_user_sse
 from services.run_bus import run_bus
 
 logger = logging.getLogger(__name__)
@@ -87,76 +94,76 @@ router = APIRouter()
 # accident of int coercion failing.
 
 @router.get("/api/agents")
-async def get_agents():
-    """Get all agents"""
-    return await AgentsController.get_all_agents()
+async def get_agents(user=Depends(get_current_user)):
+    """Get all agents visible to the caller"""
+    return await AgentsController.get_all_agents(user)
 
 @router.get("/api/agents/active")
-async def get_active_agents():
-    """Get all active agents"""
-    return await AgentsController.get_active_agents()
+async def get_active_agents(user=Depends(get_current_user)):
+    """Get active agents visible to the caller"""
+    return await AgentsController.get_active_agents(user)
 
 @router.get("/api/agents/mcp")
-async def get_mcp_agents():
-    """Get all MCP agents"""
-    return await AgentsController.get_agents_by_type("mcp")
+async def get_mcp_agents(user=Depends(get_current_user)):
+    """Get MCP agents visible to the caller"""
+    return await AgentsController.get_agents_by_type("mcp", user)
 
 @router.get("/api/agents/type/{agent_type}")
-async def get_agents_by_type(agent_type: str):
-    """Get agents by type (simple, mcp, host)"""
-    return await AgentsController.get_agents_by_type(agent_type)
+async def get_agents_by_type(agent_type: str, user=Depends(get_current_user)):
+    """Get agents by kind (simple, mcp, host)"""
+    return await AgentsController.get_agents_by_type(agent_type, user)
 
 @router.get("/api/agents/name/{name}")
-async def get_agent_by_name(name: str):
+async def get_agent_by_name(name: str, user=Depends(get_current_user)):
     """Get agent by name"""
-    return await AgentsController.get_agent_by_name(name)
+    return await AgentsController.get_agent_by_name(name, user)
 
 @router.get("/api/agents/{agent_id}")
-async def get_agent_by_id(agent_id: int):
+async def get_agent_by_id(agent_id: int, user=Depends(get_current_user)):
     """Get a specific agent by ID"""
-    return await AgentsController.get_agent_by_id(agent_id)
+    return await AgentsController.get_agent_by_id(agent_id, user)
 
 # Create endpoint
 @router.post("/api/agents")
-async def create_agent(agent_data: AgentCreateRequest):
-    """Create a new agent"""
-    return await AgentsController.create_agent(agent_data)
+async def create_agent(agent_data: AgentCreateRequest, user=Depends(get_current_user)):
+    """Create a new agent owned by the caller"""
+    return await AgentsController.create_agent(agent_data, user)
 
 # Update endpoint
 @router.put("/api/agents/{agent_id}")
-async def update_agent(agent_id: int, agent_data: AgentUpdateRequest):
-    """Update an existing agent"""
-    return await AgentsController.update_agent(agent_id, agent_data)
+async def update_agent(agent_id: int, agent_data: AgentUpdateRequest, user=Depends(get_current_user)):
+    """Update an agent the caller owns"""
+    return await AgentsController.update_agent(agent_id, agent_data, user)
 
 # Delete endpoint
 @router.delete("/api/agents/{agent_id}")
-async def delete_agent(agent_id: int):
-    """Delete an agent"""
-    return await AgentsController.delete_agent(agent_id)
+async def delete_agent(agent_id: int, user=Depends(get_current_user)):
+    """Delete an agent the caller owns"""
+    return await AgentsController.delete_agent(agent_id, user)
 
 
 # ======================= HOST AGENT ROUTES =======================
 
 @router.get("/api/host-agents")
-async def get_host_agents():
-    """Get all host agents"""
-    return await HostAgentsController.get_all_host_agents()
+async def get_host_agents(user=Depends(get_current_user)):
+    """Get coordinators visible to the caller"""
+    return await HostAgentsController.get_all_host_agents(user)
 
 @router.get("/api/host-agents/{agent_id}")
-async def get_host_agent_by_id(agent_id: int):
-    """Get a specific host agent by ID"""
-    return await HostAgentsController.get_host_agent_by_id(agent_id)
+async def get_host_agent_by_id(agent_id: int, user=Depends(get_current_user)):
+    """Get a specific coordinator by ID"""
+    return await HostAgentsController.get_host_agent_by_id(agent_id, user)
 
 @router.post("/api/host-agents")
-async def create_host_agent(agent_data: HostAgentCreateRequest):
-    """Create a new host agent"""
-    return await HostAgentsController.create_host_agent(agent_data)
+async def create_host_agent(agent_data: HostAgentCreateRequest, user=Depends(get_current_user)):
+    """Create a coordinator owned by the caller"""
+    return await HostAgentsController.create_host_agent(agent_data, user)
 
 
 # ======================= AGENT EXECUTION ROUTES =======================
 
 @router.post("/api/chat", response_model=ChatResponse)
-async def process_chat(chat_request: ChatRequest):
+async def process_chat(chat_request: ChatRequest, user=Depends(get_current_user)):
     """
     Process a chat message using agents.
     
@@ -200,6 +207,7 @@ async def process_chat(chat_request: ChatRequest):
             prompt=chat_request.prompt.strip(),
             agent_ids=chat_request.agentIds,
             host_agent_id=chat_request.hostAgentId,
+            owner_id=user["user_id"],
         )
         
         # Step 4: Process and return response
@@ -235,7 +243,7 @@ async def process_chat(chat_request: ChatRequest):
 # ======================= SINGLE AGENT EXECUTION =======================
 
 @router.post("/api/agent/run", response_model=ExecutionResponse)
-async def run_single_agent(request: SingleAgentRequest):
+async def run_single_agent(request: SingleAgentRequest, user=Depends(get_current_user)):
     """
     Execute a single agent directly.
     
@@ -263,7 +271,8 @@ async def run_single_agent(request: SingleAgentRequest):
 
         result = await AgentExecutionController.execute_single_agent(
             prompt=request.prompt.strip(),
-            agent_id=request.agentId
+            agent_id=request.agentId,
+            owner_id=user["user_id"],
         )
         
         execution_time = time.time() - start_time
@@ -301,7 +310,7 @@ async def run_single_agent(request: SingleAgentRequest):
 # ======================= TEAM EXECUTION =======================
 
 @router.post("/api/team/run", response_model=ExecutionResponse)
-async def run_team(request: TeamExecutionRequest):
+async def run_team_adhoc(request: TeamExecutionRequest, user=Depends(get_current_user)):
     """
     Execute a team with host agent coordination.
     
@@ -334,7 +343,8 @@ async def run_team(request: TeamExecutionRequest):
         result = await AgentExecutionController.execute_team(
             prompt=request.prompt.strip(),
             host_agent_id=request.hostAgentId,
-            member_agent_ids=request.memberAgentIds
+            member_agent_ids=request.memberAgentIds,
+            owner_id=user["user_id"],
         )
         
         execution_time = time.time() - start_time
@@ -387,7 +397,7 @@ class RunCreateRequest(BaseModel):
 
 
 @router.post("/api/runs", status_code=202)
-async def create_run(request: RunCreateRequest):
+async def create_run(request: RunCreateRequest, user=Depends(get_current_user)):
     """
     Start a run and return immediately with its id.
 
@@ -397,6 +407,7 @@ async def create_run(request: RunCreateRequest):
     """
     return RunController.start(
         prompt=request.prompt,
+        user=user,
         agent_ids=request.agentIds,
         host_agent_id=request.hostAgentId,
         team_id=request.teamId,
@@ -407,19 +418,22 @@ async def create_run(request: RunCreateRequest):
 async def list_runs(
     limit: int = Query(50, ge=1, le=200),
     status: Optional[str] = Query(None, description="Filter by run status"),
+    user=Depends(get_current_user),
 ):
-    """List recent runs, newest first."""
-    return RunController.list_recent(limit=limit, status=status)
+    """List the caller's recent runs, newest first."""
+    return RunController.list_recent(user=user, limit=limit, status=status)
 
 
 @router.get("/api/runs/{run_id}")
-async def get_run(run_id: str):
+async def get_run(run_id: str, user=Depends(get_current_user)):
     """Fetch a single run record."""
-    return RunController.get(run_id)
+    return RunController.get(run_id, user)
 
 
 @router.get("/api/runs/{run_id}/events")
-async def stream_run_events(run_id: str, request: Request):
+async def stream_run_events(
+    run_id: str, request: Request, user=Depends(get_current_user_sse)
+):
     """
     Server-sent events for a run.
 
@@ -428,7 +442,7 @@ async def stream_run_events(run_id: str, request: Request):
     has already finished, its terminal state is replayed from the database and
     the stream closes immediately.
     """
-    record = RunController.get(run_id)  # 404s for unknown ids
+    record = RunController.get(run_id, user)  # 404s for unknown or foreign runs
 
     async def event_source():
         channel = run_bus.get(run_id)
@@ -482,36 +496,59 @@ def _sse(payload: Dict[str, Any]) -> str:
 # shared instead of being re-specified by the client on every request.
 
 @router.get("/api/teams")
-async def list_teams():
-    """List all teams with their members."""
-    return await TeamsController.list_teams()
+async def list_teams(user=Depends(get_current_user)):
+    """List teams visible to the caller."""
+    return await TeamsController.list_teams(user)
 
 
 @router.post("/api/teams", status_code=201)
-async def create_team(payload: TeamCreateRequest):
-    """Create a reusable team."""
-    return await TeamsController.create_team(payload)
+async def create_team(payload: TeamCreateRequest, user=Depends(get_current_user)):
+    """Create a reusable team owned by the caller."""
+    return await TeamsController.create_team(payload, user)
 
 
 @router.get("/api/teams/{team_id}")
-async def get_team(team_id: int):
+async def get_team(team_id: int, user=Depends(get_current_user)):
     """Fetch a team by id."""
-    return await TeamsController.get_team(team_id)
+    return await TeamsController.get_team(team_id, user)
 
 
 @router.put("/api/teams/{team_id}")
-async def update_team(team_id: int, payload: TeamUpdateRequest):
+async def update_team(team_id: int, payload: TeamUpdateRequest, user=Depends(get_current_user)):
     """Update a team. Supplying memberAgentIds replaces membership entirely."""
-    return await TeamsController.update_team(team_id, payload)
+    return await TeamsController.update_team(team_id, payload, user)
 
 
 @router.delete("/api/teams/{team_id}")
-async def delete_team(team_id: int):
+async def delete_team(team_id: int, user=Depends(get_current_user)):
     """Delete a team. Membership rows cascade; the agents themselves remain."""
-    return await TeamsController.delete_team(team_id)
+    return await TeamsController.delete_team(team_id, user)
 
 
 @router.post("/api/teams/{team_id}/runs", status_code=202)
-async def run_team(team_id: int, request: TeamRunRequest):
+async def run_team(team_id: int, request: TeamRunRequest, user=Depends(get_current_user)):
     """Start a run using a saved team's coordinator and membership."""
-    return RunController.start(prompt=request.prompt, team_id=team_id)
+    return RunController.start(prompt=request.prompt, team_id=team_id, user=user)
+
+
+# ======================= AUTH ROUTES =======================
+#
+# The only endpoints reachable without a token. Everything else requires
+# Authorization: Bearer <access_token>.
+
+@router.post("/api/auth/register", response_model=TokenResponse, status_code=201)
+async def register(payload: RegisterRequest):
+    """Create an account and return an access token. First account is admin."""
+    return await AuthController.register(payload)
+
+
+@router.post("/api/auth/login", response_model=TokenResponse)
+async def login(payload: LoginRequest):
+    """Exchange email and password for an access token."""
+    return await AuthController.login(payload)
+
+
+@router.get("/api/auth/me")
+async def me(user=Depends(get_current_user)):
+    """Return the signed-in account."""
+    return await AuthController.me(user)

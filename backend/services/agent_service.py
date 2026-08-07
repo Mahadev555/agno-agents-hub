@@ -41,6 +41,8 @@ class AgentService:
         kind: str = AgentKind.SIMPLE,
         description: str = None,
         mcp_config: Dict[str, Any] = None,
+        owner_id: int = None,
+        is_public: bool = False,
         **legacy,
     ) -> Dict[str, Any]:
         """
@@ -81,6 +83,8 @@ class AgentService:
                 mcp_config=mcp_config or {},
                 config=validated,
                 is_active=True,
+                owner_id=owner_id,
+                is_public=bool(is_public),
             )
             session.add(agent)
             session.flush()
@@ -97,6 +101,7 @@ class AgentService:
         config: Dict[str, Any] = None,
         mcp_config: Dict[str, Any] = None,
         is_active: bool = None,
+        is_public: bool = None,
         **_,
     ) -> Dict[str, Any]:
         """Update an agent, revalidating the config if one is supplied."""
@@ -133,6 +138,8 @@ class AgentService:
                 agent.mcp_config = mcp_config
             if is_active is not None:
                 agent.is_active = is_active
+            if is_public is not None:
+                agent.is_public = bool(is_public)
 
             session.flush()
             record = agent.to_dict()
@@ -146,12 +153,19 @@ class AgentService:
         config: Dict[str, Any],
         description: str = None,
         mode: str = "coordinate",
+        owner_id: int = None,
+        is_public: bool = False,
     ) -> Dict[str, Any]:
         """Create a coordinator. Thin wrapper kept for existing callers."""
         blob = dict(config or {})
         blob.setdefault("mode", mode)
         return AgentService.create_agent(
-            name=name, config=blob, kind=AgentKind.HOST, description=description
+            name=name,
+            config=blob,
+            kind=AgentKind.HOST,
+            description=description,
+            owner_id=owner_id,
+            is_public=is_public,
         )
 
     @staticmethod
@@ -203,6 +217,8 @@ class TeamService:
         description: str = None,
         mode: str = "coordinate",
         config: Dict[str, Any] = None,
+        owner_id: int = None,
+        is_public: bool = False,
     ) -> Dict[str, Any]:
         """
         Create a team.
@@ -247,6 +263,8 @@ class TeamService:
                 mode=mode,
                 config=config or {},
                 is_active=True,
+                owner_id=owner_id,
+                is_public=bool(is_public),
             )
             session.add(team)
             session.flush()

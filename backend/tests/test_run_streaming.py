@@ -235,24 +235,41 @@ async def test_sse_endpoint_streams_tokens_over_http(stub_build, monkeypatch):
     Drive the real SSE route in-process: POST /api/runs, then read the event
     stream and confirm tokens arrive individually and the run is persisted.
     """
+    import uuid as _uuid
+
     import httpx
 
     from app import app
+    from services.auth_service import AuthService, create_access_token
     from services.run_bus import run_bus
 
     stub_build(FakeRunnable(chunks=["Streaming ", "works ", "end ", "to ", "end."]))
 
-    # Skip the database lookups; this test is about the transport.
+    # Every endpoint requires a token now, so the test signs in for real.
+    email = f"__stream_{_uuid.uuid4().hex[:10]}@example.com"
+    account = AuthService.register(email, "a-long-enough-passphrase")
+    token = create_access_token(account["user_id"], email)["access_token"]
+    auth = {"Authorization": f"Bearer {token}"}
+
+    # Skip the database lookups; this test is about the transport. The agent is
+    # returned unowned, which the caller is allowed to read.
     from controllers import agent_execution_controller as aec
 
     monkeypatch.setattr(
         aec.AgentExecutionController, "_load_agents",
-        staticmethod(lambda ids: [{"agent_id": 1, "name": "Fake", "config": {}}]),
+        staticmethod(
+            lambda ids: [
+                {"agent_id": 1, "name": "Fake", "config": {}, "owner_id": None,
+                 "is_public": False}
+            ]
+        ),
     )
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        created = await client.post("/api/runs", json={"prompt": "go", "agentIds": [1]})
+        created = await client.post(
+            "/api/runs", json={"prompt": "go", "agentIds": [1]}, headers=auth
+        )
         assert created.status_code == 202
         run_id = created.json()["run_id"]
 
@@ -261,7 +278,9 @@ async def test_sse_endpoint_streams_tokens_over_http(stub_build, monkeypatch):
         await asyncio.sleep(0.2)
 
         events = []
-        async with client.stream("GET", f"/api/runs/{run_id}/events") as response:
+        async with client.stream(
+            "GET", f"/api/runs/{run_id}/events", headers=auth
+        ) as response:
             assert response.status_code == 200
             assert "text/event-stream" in response.headers["content-type"]
             async for line in response.aiter_lines():
@@ -285,4 +304,11 @@ async def test_sse_endpoint_streams_tokens_over_http(stub_build, monkeypatch):
     assert record["status"] == RunStatus.COMPLETED
     assert record["output"] == "Streaming works end to end."
     assert record["total_tokens"] == 22
+    assert record["owner_id"] == account["user_id"]
     run_bus.discard(run_id)
+
+    from connection import session_scope
+    from models.user import User
+
+    with session_scope() as session:
+        session.query(User).filter(User.email == email).delete(synchronize_session=False)

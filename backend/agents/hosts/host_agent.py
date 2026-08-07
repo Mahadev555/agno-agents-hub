@@ -14,6 +14,7 @@ from agno.tools.mcp import MCPTools
 from agno.utils.log import logger
 from dotenv import load_dotenv
 
+from runtime.mcp_guard import MCPEndpointBlocked, validate_mcp_url
 from runtime.registry import build_model, build_tools
 
 load_dotenv()
@@ -123,8 +124,16 @@ def _create_mcp_agent(agent_row: Dict[str, Any]) -> Agent:
     mcp_config = agent_row.get("mcp_config") or {}
     inner = _inner_config(agent_row)
 
+    # The URL is user-supplied and the server connects to it, so it is checked
+    # against the egress policy before any connection is attempted.
+    url = mcp_config.get("url", "http://localhost:3001/sse")
+    try:
+        validate_mcp_url(url)
+    except MCPEndpointBlocked as exc:
+        raise AgentBuildError(str(exc)) from exc
+
     mcp_tools = MCPTools(
-        url=mcp_config.get("url", "http://localhost:3001/sse"),
+        url=url,
         transport=mcp_config.get("transport", "sse"),
         timeout_seconds=mcp_config.get("timeout_seconds", 300),
         **mcp_config.get("additional_params", {}),
