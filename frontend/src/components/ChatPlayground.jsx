@@ -15,6 +15,7 @@ const ChatPlayground = () => {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState(null)
   const messagesEndRef = useRef(null)
 
@@ -36,6 +37,21 @@ const ChatPlayground = () => {
     scrollToBottom()
   }, [messages])
 
+  // Team runs legitimately take 20-60s+, so show progress rather than an
+  // indefinite spinner.
+  useEffect(() => {
+    if (!loading) {
+      setElapsed(0)
+      return
+    }
+    const startedAt = Date.now()
+    const timer = setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      1000
+    )
+    return () => clearInterval(timer)
+  }, [loading])
+
   const fetchAgents = async () => {
     try {
       const data = await agentService.getAgents()
@@ -46,7 +62,7 @@ const ChatPlayground = () => {
       }
     } catch (err) {
       console.error('Failed to fetch agents:', err)
-      setError('Failed to load agents')
+      setError(err.message)
     }
   }
 
@@ -60,7 +76,7 @@ const ChatPlayground = () => {
       }
     } catch (err) {
       console.error('Failed to fetch host agents:', err)
-      setError('Failed to load host agents')
+      setError(err.message)
     }
   }
 
@@ -98,7 +114,9 @@ const ChatPlayground = () => {
       const response = await agentService.executeSingleAgent(selectedAgent, input)
       addMessage(response.response || 'No response', 'agent')
     } catch (err) {
-      setError('Execution failed')
+      // err.message carries the API's `detail`, e.g. "Unknown tool(s) [...]"
+      // or "Could not connect to an MCP server...".
+      setError(err.message)
       addMessage('Error: ' + err.message, 'error')
     } finally {
       setLoading(false)
@@ -117,7 +135,7 @@ const ChatPlayground = () => {
       const response = await agentService.executeTeam(selectedHostAgent, selectedMembers, input)
       addMessage(response.response || 'Team execution complete', 'agent')
     } catch (err) {
-      setError('Team execution failed')
+      setError(err.message)
       addMessage('Error: ' + err.message, 'error')
     } finally {
       setLoading(false)
@@ -277,7 +295,10 @@ const ChatPlayground = () => {
               className="flex justify-start"
             >
               <div className="bg-slate-200 text-slate-900 px-4 py-3 rounded-lg flex items-center gap-2">
-                <span className="text-sm font-medium"></span>
+                <span className="text-sm font-medium">
+                  {executionMode === 'team' ? 'Coordinating team' : 'Running agent'}
+                  {elapsed > 0 ? ` · ${elapsed}s` : ''}
+                </span>
                 <motion.div
                   animate={{ opacity: [0.4, 1, 0.4] }}
                   transition={{ duration: 1.5, repeat: Infinity }}

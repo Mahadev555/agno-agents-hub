@@ -196,7 +196,7 @@ async def process_chat(chat_request: ChatRequest):
         if result.get("status") == "completed":
             logger.info("✅ Task completed successfully")
             return ChatResponse(
-                response=result.get("content", "No response generated"),
+                response=result.get("content") or "No response generated",
                 agents=chat_request.agentIds,
                 status="completed",
                 message="Task executed successfully"
@@ -205,7 +205,7 @@ async def process_chat(chat_request: ChatRequest):
             error_msg = result.get("message", "Unknown error")
             logger.error(f"❌ Task failed: {error_msg}")
             return ChatResponse(
-                response=result.get("content", ""),
+                response=result.get("content") or "",
                 agents=chat_request.agentIds,
                 status="error",
                 message=error_msg
@@ -263,7 +263,7 @@ async def run_single_agent(request: SingleAgentRequest):
         if result.get("status") == "completed":
             logger.info("✅ Single agent execution successful")
             return ExecutionResponse(
-                response=result.get("content", "No response generated"),
+                response=result.get("content") or "No response generated",
                 mode="single",
                 agents_used=[request.agentId],
                 status="completed",
@@ -273,7 +273,7 @@ async def run_single_agent(request: SingleAgentRequest):
         else:
             logger.error(f"❌ Execution failed: {result.get('message')}")
             return ExecutionResponse(
-                response=result.get("content", ""),
+                response=result.get("content") or "",
                 mode="single",
                 agents_used=[request.agentId],
                 status="error",
@@ -335,7 +335,7 @@ async def run_team(request: TeamExecutionRequest):
         if result.get("status") == "completed":
             logger.info("✅ Team execution successful")
             return ExecutionResponse(
-                response=result.get("content", "No response generated"),
+                response=result.get("content") or "No response generated",
                 mode="team",
                 agents_used=all_agents,
                 status="completed",
@@ -345,7 +345,7 @@ async def run_team(request: TeamExecutionRequest):
         else:
             logger.error(f"❌ Team execution failed: {result.get('message')}")
             return ExecutionResponse(
-                response=result.get("content", ""),
+                response=result.get("content") or "",
                 mode="team",
                 agents_used=all_agents,
                 status="error",

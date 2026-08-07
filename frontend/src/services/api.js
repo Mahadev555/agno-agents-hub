@@ -2,115 +2,137 @@ import axios from 'axios'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
+// CRUD calls are fast. Agent execution is not: a coordinated team run routinely
+// takes 20-60s because it is several sequential LLM calls. A single 30s timeout
+// aborted those runs client-side while the backend kept burning tokens.
+const CRUD_TIMEOUT = 15000
+const EXECUTION_TIMEOUT = 300000
+
 // Create axios instance
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 30000,
+  timeout: CRUD_TIMEOUT,
 })
+
+/**
+ * Turn an axios failure into a message worth showing a user.
+ *
+ * The API returns FastAPI error bodies: `detail` is a string for raised
+ * HTTPExceptions (404/400/502) and an array of validation objects for 422.
+ * Without this, everything surfaced as "Request failed with status code 500".
+ */
+const extractErrorMessage = (error) => {
+  if (error.code === 'ECONNABORTED') {
+    return 'The request timed out. The agent may still be running on the server.'
+  }
+
+  if (!error.response) {
+    return `Cannot reach the API at ${API_BASE_URL}. Is the backend running?`
+  }
+
+  const { detail } = error.response.data || {}
+
+  if (typeof detail === 'string') return detail
+
+  // FastAPI 422: [{ loc: ['body','prompt'], msg: '...', type: '...' }, ...]
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => {
+        const field = Array.isArray(item.loc)
+          ? item.loc.filter((part) => part !== 'body').join('.')
+          : ''
+        return field ? `${field}: ${item.msg}` : item.msg
+      })
+      .join('; ')
+  }
+
+  if (detail) return JSON.stringify(detail)
+
+  return error.message || `Request failed with status ${error.response.status}`
+}
 
 // Response interceptor
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    console.error('API Error:', error.response?.data || error.message)
-    return Promise.reject(error)
+    const message = extractErrorMessage(error)
+    console.error('API Error:', error.response?.status ?? '', message)
+
+    const normalized = new Error(message)
+    normalized.status = error.response?.status
+    normalized.original = error
+    return Promise.reject(normalized)
   }
 )
+
+/**
+ * Unwrap an execution response.
+ *
+ * The API can report failure two ways: a non-2xx status (handled by the
+ * interceptor) or a 200 carrying status: "error" when the run itself failed
+ * partway. The second kind used to be rendered as an empty reply.
+ */
+const unwrapExecution = (data) => {
+  if (data?.status === 'error') {
+    throw new Error(data.message || 'Agent execution failed')
+  }
+  return data
+}
 
 // API Services
 export const agentService = {
   getAgents: async () => {
-    try {
-      const response = await api.get('/api/agents')
-      return response.data || []
-    } catch (error) {
-      console.error('Error fetching agents:', error)
-      throw error
-    }
+    const response = await api.get('/api/agents')
+    return response.data || []
   },
 
   getHostAgents: async () => {
-    try {
-      const response = await api.get('/api/host-agents')
-      return response.data || []
-    } catch (error) {
-      console.error('Error fetching host agents:', error)
-      throw error
-    }
+    const response = await api.get('/api/host-agents')
+    return response.data || []
   },
 
   getAgentById: async (agentId) => {
-    try {
-      const response = await api.get(`/api/agents/${agentId}`)
-      return response.data
-    } catch (error) {
-      console.error(`Error fetching agent ${agentId}:`, error)
-      throw error
-    }
+    const response = await api.get(`/api/agents/${agentId}`)
+    return response.data
   },
 
   executeSingleAgent: async (agentId, prompt) => {
-    try {
-      const response = await api.post('/api/agent/run', {
-        agentId: agentId,
-        prompt: prompt,
-      })
-      return response.data
-    } catch (error) {
-      console.error('Error executing single agent:', error)
-      throw error
-    }
+    const response = await api.post(
+      '/api/agent/run',
+      { agentId: Number(agentId), prompt },
+      { timeout: EXECUTION_TIMEOUT }
+    )
+    return unwrapExecution(response.data)
   },
 
   executeTeam: async (hostAgentId, memberAgentIds, prompt) => {
-    try {
-      const response = await api.post('/api/team/run', {
-        hostAgentId: hostAgentId,
-        memberAgentIds: memberAgentIds,
-        prompt: prompt,
-      })
-      return response.data
-    } catch (error) {
-      console.error('Error executing team:', error)
-      throw error
-    }
+    const response = await api.post(
+      '/api/team/run',
+      {
+        hostAgentId: Number(hostAgentId),
+        memberAgentIds: memberAgentIds.map(Number),
+        prompt,
+      },
+      { timeout: EXECUTION_TIMEOUT }
+    )
+    return unwrapExecution(response.data)
   },
 
-  sendMessage: async (prompt, agentIds = []) => {
-    try {
-      const payload = agentIds.length > 0 
-        ? { prompt, agentIds }
-        : { prompt }
-      
-      const response = await api.post('/api/chat', payload)
-      return response.data
-    } catch (error) {
-      console.error('Error sending message:', error)
-      throw error
-    }
-  },
+  sendMessage: async (prompt, agentIds = [], hostAgentId = null) => {
+    const payload = { prompt }
+    if (agentIds.length > 0) payload.agentIds = agentIds.map(Number)
+    if (hostAgentId) payload.hostAgentId = Number(hostAgentId)
 
-  executeAgent: async (agentId, input) => {
-    try {
-      const response = await api.post(`/api/execute/${agentId}`, input)
-      return response.data
-    } catch (error) {
-      console.error('Error executing agent:', error)
-      throw error
-    }
+    const response = await api.post('/api/chat', payload, { timeout: EXECUTION_TIMEOUT })
+    return unwrapExecution(response.data)
   },
 
   createAgent: async (agentData) => {
-    try {
-      const response = await api.post('/api/agents', agentData)
-      return response.data
-    } catch (error) {
-      console.error('Error creating agent:', error)
-      throw error
-    }
+    const response = await api.post('/api/agents', agentData)
+    return response.data
   },
 }
 
