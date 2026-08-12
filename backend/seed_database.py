@@ -178,33 +178,90 @@ def seed_host_agent_from_file(file_path: str):
 
 
 def main():
-    """Main seeder function"""
-    from connection import init_db
-    
+    """
+    Seed agents from JSON config files.
+
+    Seeding is additive by default: existing agents with the same name are
+    skipped and nothing else is touched. `--reset` drops every table first,
+    which destroys users, teams, and run history as well as agents, so it has
+    to be asked for explicitly and is refused outside development.
+    """
+    import argparse
+
+    from config import get_settings
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        help="DESTRUCTIVE: drop and recreate all tables before seeding",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt for --reset",
+    )
+    args = parser.parse_args()
+
+    settings = get_settings()
+
+    if args.reset:
+        if settings.is_production:
+            logger.error(
+                f"Refusing to --reset with ENVIRONMENT={settings.environment}. "
+                "This would delete all users, agents, teams, and run history."
+            )
+            return 1
+
+        target = settings.database_url.split("@")[-1].split("?")[0]
+        logger.warning("=" * 60)
+        logger.warning("--reset will DROP every table in:")
+        logger.warning(f"    {target}")
+        logger.warning("That includes users, teams, and all run history.")
+        logger.warning("=" * 60)
+
+        if not args.yes:
+            answer = input("Type the word RESET to continue: ").strip()
+            if answer != "RESET":
+                logger.info("Aborted; nothing was changed.")
+                return 1
+
+        from connection import init_db
+
+        init_db(recreate_tables=True)
+    else:
+        # Schema is Alembic's job. Fail early with a useful message rather than
+        # a confusing "relation does not exist" from the first insert.
+        from sqlalchemy import inspect
+
+        from connection import engine
+
+        if "agents" not in inspect(engine).get_table_names():
+            logger.error(
+                "No 'agents' table. Create the schema first: "
+                "python -m alembic upgrade head"
+            )
+            return 1
+
     logger.info("=" * 60)
-    logger.info("Starting database seeder...")
+    logger.info("Seeding agents from JSON configs...")
     logger.info("=" * 60)
-    
-    # Initialize database with table recreation (important for schema changes)
-    logger.info("\nInitializing database...")
-    init_db(recreate_tables=True)
-    
-    # Get configs directory
+
     configs_dir = os.path.join(os.path.dirname(__file__), "agents", "configs")
-    
-    # Seed regular agents
-    agent_count = seed_agents_from_directory(configs_dir)
-    
-    # Seed host agent
+    seed_agents_from_directory(configs_dir)
+
     host_config_file = os.path.join(configs_dir, "host_config.json")
     if os.path.exists(host_config_file):
-        logger.info(f"\nLoading host agent from {host_config_file}...")
+        logger.info(f"Loading host agent from {host_config_file}...")
         seed_host_agent_from_file(host_config_file)
-    
-    logger.info("=" * 60)
-    logger.info("Seeding completed!")
-    logger.info("=" * 60)
+
+    logger.info("Seeding completed.")
+    logger.info(
+        "Seeded agents have no owner, so only an administrator can edit them. "
+        "The first registered account is an administrator."
+    )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
