@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
 import { Send, Trash2, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
-import { agentService, runService } from '../services/api'
+import { agentService, isCoordinatorAgent, runService } from '../services/api'
 import Button from './Button'
 
-const ChatPlayground = () => {
+const ChatPlayground = ({ initialAgentId, initialHostAgentId, onToast }) => {
   const [agents, setAgents] = useState([])
   const [hostAgents, setHostAgents] = useState([])
   const [executionMode, setExecutionMode] = useState('single')
@@ -31,12 +30,7 @@ const ChatPlayground = () => {
       await fetchHostAgents()
     }
     initializeChat()
-    setMessages([{
-      id: Date.now().toString(),
-      text: 'Welcome to Agno Hub Chat! Select agents and execute prompts.',
-      role: 'system',
-      timestamp: new Date(),
-    }])
+    setMessages([])
   }, [])
 
   useEffect(() => {
@@ -61,10 +55,10 @@ const ChatPlayground = () => {
   const fetchAgents = async () => {
     try {
       const data = await agentService.getAgents()
-      const agentList = Array.isArray(data) ? data : []
+      const agentList = Array.isArray(data) ? data.filter(agent => !isCoordinatorAgent(agent)) : []
       setAgents(agentList)
-      if (agentList.length > 0) {
-        setSelectedAgent(agentList[0].agent_id || agentList[0].id)
+      if (agentList.length > 0 && !initialAgentId) {
+        setSelectedAgent(String(agentList[0].agent_id || agentList[0].id))
       }
     } catch (err) {
       console.error('Failed to fetch agents:', err)
@@ -77,8 +71,8 @@ const ChatPlayground = () => {
       const data = await agentService.getHostAgents()
       const hostAgentList = Array.isArray(data) ? data : []
       setHostAgents(hostAgentList)
-      if (hostAgentList.length > 0) {
-        setSelectedHostAgent(hostAgentList[0].agent_id || hostAgentList[0].id)
+      if (hostAgentList.length > 0 && !initialHostAgentId) {
+        setSelectedHostAgent(String(hostAgentList[0].agent_id || hostAgentList[0].id))
       }
     } catch (err) {
       console.error('Failed to fetch host agents:', err)
@@ -86,17 +80,19 @@ const ChatPlayground = () => {
     }
   }
 
+  useEffect(() => {
+    if (initialAgentId) {
+      setSelectedAgent(String(initialAgentId))
+      setExecutionMode('single')
+    }
+    if (initialHostAgentId) {
+      setSelectedHostAgent(String(initialHostAgentId))
+      setExecutionMode('team')
+    }
+  }, [initialAgentId, initialHostAgentId])
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
-
-  const addSystemMessage = (text) => {
-    setMessages(prev => [...prev, {
-      id: Date.now().toString(),
-      text,
-      role: 'system',
-      timestamp: new Date(),
-    }])
   }
 
   const addMessage = (text, role) => {
@@ -168,6 +164,7 @@ const ChatPlayground = () => {
             // tokens; they agree, but the server value is authoritative.
             finalizeStreaming(event.output)
             setToolActivity(null)
+            onToast?.('Run completed')
             resolve()
           },
           onError: (err) => {
@@ -178,6 +175,7 @@ const ChatPlayground = () => {
             setError(err.message)
             addMessage('Error: ' + err.message, 'error')
             setToolActivity(null)
+            onToast?.('Run failed', 'danger')
             resolve()
           },
         })
@@ -188,6 +186,7 @@ const ChatPlayground = () => {
       setMessages(prev => prev.filter(msg => msg.id !== placeholderId))
       setError(err.message)
       addMessage('Error: ' + err.message, 'error')
+      onToast?.('Run failed', 'danger')
     } finally {
       cancelStreamRef.current = null
       setLoading(false)
@@ -212,45 +211,42 @@ const ChatPlayground = () => {
     )
   }
 
-  const copyMessage = (text) => {
-    navigator.clipboard.writeText(text)
+  const copyMessage = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text)
+    } catch (err) {
+      console.error('Failed to copy agent response:', err)
+      setError('Could not copy the response. Check your browser clipboard permissions.')
+    }
   }
 
   return (
-    <div className="space-y-6 h-full flex flex-col">
-      <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
-        <h1 className="text-4xl font-bold gradient-text">Chat Playground</h1>
-        <p className="text-slate-600 mt-2">Execute single or team-based AI operations</p>
-      </motion.div>
-
-      {/* Mode Selection */}
-      <div className="flex gap-4 border-b border-slate-200 pb-4">
+    <div className="chat-page">
+      <div className="chat-mode-tabs" role="group" aria-label="Execution mode">
         {['single', 'team'].map(mode => (
-          <motion.button
+          <button
             key={mode}
-            whileHover={{ scale: 1.05 }}
+            type="button"
             onClick={() => setExecutionMode(mode)}
-            className={`px-6 py-2 font-medium rounded-lg transition-all ${
-              executionMode === mode
-                ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white shadow-md'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
+            aria-pressed={executionMode === mode}
+            className={`mode-button ${executionMode === mode ? 'mode-button-active' : ''}`}
           >
-            {mode === 'single' ? 'Single Agent' : 'Team Execution'}
-          </motion.button>
+            {mode === 'single' ? 'Single agent' : 'Team'}
+          </button>
         ))}
       </div>
 
-      {/* Config Section */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="card p-6">
+      <div className="surface chat-config">
         {executionMode === 'single' ? (
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2">Select Agent</label>
+            <label htmlFor="selected-agent" className="field-label">Agent</label>
             <select
+              id="selected-agent"
               value={selectedAgent}
               onChange={(e) => setSelectedAgent(e.target.value)}
               className="input-primary"
             >
+              {agents.length === 0 && <option value="">No agents available</option>}
               {agents.map(agent => (
                 <option key={agent.agent_id || agent.id} value={agent.agent_id || agent.id}>
                   {agent.name}{agent.role ? ` (${agent.role})` : ''}
@@ -261,12 +257,14 @@ const ChatPlayground = () => {
         ) : (
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Host Agent</label>
+              <label htmlFor="selected-host-agent" className="field-label">Coordinator</label>
               <select
+                id="selected-host-agent"
                 value={selectedHostAgent}
                 onChange={(e) => setSelectedHostAgent(e.target.value)}
                 className="input-primary"
               >
+                {hostAgents.length === 0 && <option value="">No coordinator agents available</option>}
                 {hostAgents.map(agent => (
                   <option key={agent.agent_id || agent.id} value={agent.agent_id || agent.id}>
                     {agent.name}{agent.role ? ` (${agent.role})` : ''}
@@ -275,50 +273,40 @@ const ChatPlayground = () => {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2">Team Members</label>
+              <span className="field-label">Agents</span>
               <div className="flex flex-wrap gap-2">
                 {agents.map(agent => (
-                  <motion.button
+                  <button
                     key={agent.agent_id || agent.id}
-                    whileHover={{ scale: 1.05 }}
+                    type="button"
                     onClick={() => toggleMember(agent.agent_id || agent.id)}
-                    className={`px-3 py-2 rounded-lg font-medium transition-all ${
-                      selectedMembers.includes(agent.agent_id || agent.id)
-                        ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
+                    aria-pressed={selectedMembers.includes(agent.agent_id || agent.id)}
+                    className={`team-member ${selectedMembers.includes(agent.agent_id || agent.id) ? 'team-member-active' : ''}`}
                   >
                     {agent.name}
-                  </motion.button>
+                  </button>
                 ))}
+                {agents.length === 0 && (
+                  <p className="text-sm text-slate-500">Create an individual agent before configuring a team.</p>
+                )}
               </div>
             </div>
           </div>
         )}
-      </motion.div>
+      </div>
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto space-y-4 card p-6">
-        <AnimatePresence>
+      <div className="surface chat-transcript" role="log" aria-label="Conversation">
+          {messages.length === 0 && (
+            <p className="transcript-empty">Enter a task to start a run.</p>
+          )}
           {messages.map(msg => (
-            <motion.div
+            <div
               key={msg.id}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`chat-message ${msg.role === 'user' ? 'chat-message-user' : ''}`}
             >
-              <div className={`max-w-xl px-4 py-3 rounded-lg ${
-                msg.role === 'user'
-                  ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white'
-                  : msg.role === 'system'
-                  ? 'bg-slate-100 text-slate-700'
-                  : msg.role === 'error'
-                  ? 'bg-red-100 text-red-700'
-                  : 'bg-slate-200 text-slate-900'
-              }`}>
+              <div className={`message-bubble message-${msg.role}`}>
                 {msg.role === 'agent' || msg.role === 'system' ? (
-                  <div className="text-sm prose prose-sm max-w-none dark:prose-invert">
+                  <div className="chat-markdown">
                     <ReactMarkdown
                       components={{
                         p: ({children}) => <p className="mb-2 last:mb-0">{children}</p>,
@@ -327,7 +315,7 @@ const ChatPlayground = () => {
                         li: ({children}) => <li className="mb-1">{children}</li>,
                         strong: ({children}) => <strong className="font-semibold">{children}</strong>,
                         em: ({children}) => <em className="italic">{children}</em>,
-                        code: ({children}) => <code className="bg-black/20 px-1.5 py-0.5 rounded text-xs font-mono">{children}</code>,
+                        code: ({children}) => <code className="chat-code">{children}</code>,
                         a: ({href, children}) => <a href={href} className="underline hover:opacity-80">{children}</a>,
                       }}
                     >
@@ -338,82 +326,82 @@ const ChatPlayground = () => {
                   <p className="text-sm">{msg.text}</p>
                 )}
                 {msg.role === 'agent' && (
-                  <motion.button
-                    whileHover={{ scale: 1.1 }}
+                  <button
+                    type="button"
                     onClick={() => copyMessage(msg.text)}
-                    className="mt-2 p-1 hover:bg-white/20 rounded"
+                    className="copy-button"
+                    aria-label="Copy response"
                   >
-                    <Copy size={14} />
-                  </motion.button>
+                    <Copy size={16} strokeWidth={1.5} aria-hidden="true" />
+                    Copy
+                  </button>
                 )}
               </div>
-            </motion.div>
+            </div>
           ))}
           {loading && !messages.some(m => m.streaming && m.text) && (
-            <motion.div
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              className="flex justify-start"
-            >
-              <div className="bg-slate-200 text-slate-900 px-4 py-3 rounded-lg flex items-center gap-2">
+            <div className="chat-message" role="status" aria-live="polite">
+              <div className="message-bubble message-agent">
                 <span className="text-sm font-medium">
                   {toolActivity ||
                     (executionMode === 'team' ? 'Coordinating team' : 'Running agent')}
                   {elapsed > 0 ? ` · ${elapsed}s` : ''}
                 </span>
-                <motion.div
-                  animate={{ opacity: [0.4, 1, 0.4] }}
-                  transition={{ duration: 1.5, repeat: Infinity }}
-                  className="flex gap-1"
-                >
-                  <div className="w-2 h-2 bg-slate-600 rounded-full" />
-                  <div className="w-2 h-2 bg-slate-600 rounded-full" />
-                  <div className="w-2 h-2 bg-slate-600 rounded-full" />
-                </motion.div>
               </div>
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
         <div ref={messagesEndRef} />
       </div>
 
       {/* Input Section */}
-      <motion.div className="card p-6 space-y-3">
+      <form
+        className="surface chat-composer"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (executionMode === 'single') handleExecuteSingle()
+          else handleExecuteTeam()
+        }}
+      >
         {error && (
-          <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+          <div className="feedback-error" role="alert">
             {error}
           </div>
         )}
-        <div className="flex gap-2">
+        <div className="chat-composer-row">
           <input
             type="text"
+            aria-label="Task prompt"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && (executionMode === 'single' ? handleExecuteSingle() : handleExecuteTeam())}
             placeholder="Enter your prompt..."
-            className="input-primary flex-1"
+            className="input-primary"
             disabled={loading}
           />
-          <motion.button
-            whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
-            onClick={executionMode === 'single' ? handleExecuteSingle : handleExecuteTeam}
-            disabled={loading || !input.trim()}
-            className="btn-primary flex items-center gap-2 disabled:opacity-50"
+          <Button
+            type="submit"
+            disabled={
+              loading ||
+              !input.trim() ||
+              (executionMode === 'single' && !selectedAgent) ||
+              (executionMode === 'team' && (!selectedHostAgent || selectedMembers.length === 0))
+            }
+            className="button-primary"
           >
-            <Send size={18} />
-            Execute
-          </motion.button>
-          <motion.button
-            whileHover={{ scale: 1.05 }}
+            <Send size={16} strokeWidth={1.5} aria-hidden="true" />
+            {loading ? 'Running…' : 'Run'}
+          </Button>
+          <button
+            type="button"
             onClick={() => setMessages([])}
-            className="p-2.5 hover:bg-slate-200 rounded-lg"
+            className="icon-button"
+            aria-label="Clear conversation"
+            title="Clear conversation"
+            disabled={loading || messages.length === 0}
           >
-            <Trash2 size={18} />
-          </motion.button>
+            <Trash2 size={16} strokeWidth={1.5} aria-hidden="true" />
+          </button>
         </div>
-      </motion.div>
+      </form>
     </div>
   )
 }

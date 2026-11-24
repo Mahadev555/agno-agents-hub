@@ -13,6 +13,30 @@ const EXECUTION_TIMEOUT = 300000
 // would be stronger but need CSRF handling and a same-site deployment.
 const TOKEN_KEY = 'agnohub.token'
 
+export const isCoordinatorAgent = (agent) =>
+  agent?.kind === 'host' || agent?.agent_type === 'host'
+
+export const buildLatestRunByAgent = (runs) => {
+  const latest = {}
+  for (const run of runs) {
+    const startedAt = run.started_at || run.created_at
+    if (!startedAt) continue
+    const ids = [
+      ...(Array.isArray(run.agent_ids) ? run.agent_ids : []),
+      run.host_agent_id,
+    ].filter((id) => id !== null && id !== undefined)
+
+    for (const id of ids) {
+      const key = String(id)
+      const current = latest[key]
+      if (!current || new Date(startedAt) > new Date(current)) {
+        latest[key] = startedAt
+      }
+    }
+  }
+  return latest
+}
+
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
   set: (token) => localStorage.setItem(TOKEN_KEY, token),
@@ -53,7 +77,9 @@ api.interceptors.request.use((config) => {
  */
 const extractErrorMessage = (error) => {
   if (error.code === 'ECONNABORTED') {
-    return 'The request timed out. The agent may still be running on the server.'
+    return error.config?.timeout === EXECUTION_TIMEOUT
+      ? 'The execution request timed out. The agent may still be running on the server.'
+      : 'The request timed out. Check your connection and try again.'
   }
 
   if (!error.response) {

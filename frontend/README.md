@@ -22,12 +22,14 @@ frontend/
 │   ├── index.css            Tailwind + shared classes
 │   ├── components/
 │   │   ├── Login.jsx        Sign in / register
-│   │   ├── Header.jsx       Top bar, account menu, sign out
-│   │   ├── Sidebar.jsx      Navigation + create-agent modal
-│   │   ├── Dashboard.jsx    Counts and overview
-│   │   ├── AgentComponent.jsx  Agent cards
+│   │   ├── Header.jsx       Breadcrumb and global create action
+│   │   ├── Sidebar.jsx      Navigation and account menu
+│   │   ├── AgentCreateModal.jsx  Agent creation form
+│   │   ├── Dashboard.jsx    Overview counts and recent agents
+│   │   ├── AgentComponent.jsx  Agent catalog and details
+│   │   ├── AgentTable.jsx   Responsive agent list and loading skeleton
 │   │   ├── ChatPlayground.jsx  Run agents/teams with streamed output
-│   │   ├── Settings.jsx
+│   │   ├── Settings.jsx     Account profile
 │   │   ├── Button.jsx
 │   │   └── index.js
 │   ├── hooks/
@@ -37,6 +39,10 @@ frontend/
 │       └── api.js           HTTP client, auth, SSE
 └── public/
 ```
+
+The interface uses bundled Inter, shared CSS-variable design tokens in
+`src/index.css`, and Tailwind mappings in `tailwind.config.js`. Light and dark
+colors follow the operating-system preference.
 
 ---
 
@@ -98,6 +104,12 @@ The first account registered on a fresh deployment becomes an **administrator**.
 ## Running agents
 
 `ChatPlayground.jsx` uses the streaming API. Both single-agent and team modes go through one path:
+
+The dashboard and agent catalog share the same agent cards. **Run** opens the execution
+view with the selected agent; coordinator agents open team setup. **Details** shows the
+agent configuration summary. Account actions are limited to data currently supported by
+the API; unsupported notification, theme, and security settings are not presented as
+working controls.
 
 ```js
 const run = await runService.start(prompt, { agentIds, hostAgentId })

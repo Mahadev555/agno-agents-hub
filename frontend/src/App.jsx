@@ -1,5 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import Header from './components/Header'
 import Sidebar from './components/Sidebar'
 import Dashboard from './components/Dashboard'
@@ -8,23 +7,43 @@ import AgentComponent from './components/AgentComponent'
 import Settings from './components/Settings'
 import Login from './components/Login'
 import { authService, setUnauthenticatedHandler } from './services/api'
+import { useMediaQuery } from './hooks/useMediaQuery'
+import { X } from 'lucide-react'
 
 const App = () => {
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [selectedAgentId, setSelectedAgentId] = useState(null)
+  const [selectedHostAgentId, setSelectedHostAgentId] = useState(null)
+  const [agentRefreshKey, setAgentRefreshKey] = useState(0)
+  const [createAgentOpen, setCreateAgentOpen] = useState(false)
+  const [toast, setToast] = useState(null)
 
   // null = signed out, undefined = still checking a stored token.
   const [user, setUser] = useState(undefined)
+  const [authNotice, setAuthNotice] = useState(null)
+
+  useEffect(() => {
+    setSidebarOpen(isDesktop)
+  }, [isDesktop])
 
   const signOut = useCallback(() => {
     authService.logout()
     setUser(null)
+    setAuthNotice(null)
+    setActiveTab('dashboard')
+    setSelectedAgentId(null)
+    setSelectedHostAgentId(null)
   }, [])
 
   // The API layer calls this when the server rejects our token, so an expired
   // session drops to the login screen instead of rendering empty lists.
   useEffect(() => {
-    setUnauthenticatedHandler(() => setUser(null))
+    setUnauthenticatedHandler(() => {
+      setAuthNotice('Your session expired. Sign in again.')
+      setUser(null)
+    })
     return () => setUnauthenticatedHandler(null)
   }, [])
 
@@ -40,9 +59,15 @@ const App = () => {
       try {
         const me = await authService.me()
         if (!cancelled) setUser(me)
-      } catch {
-        // The interceptor already cleared the token.
-        if (!cancelled) setUser(null)
+      } catch (error) {
+        if (!cancelled) {
+          setUser(null)
+          setAuthNotice(
+            error.status === 401
+              ? 'Your session expired. Sign in again.'
+              : 'Could not verify your session. Check your connection, then sign in again.'
+          )
+        }
       }
     }
 
@@ -53,22 +78,85 @@ const App = () => {
   }, [])
 
   const tabs = [
-    { id: 'dashboard', label: 'Dashboard', icon: '📊' },
-    { id: 'chat', label: 'Chat', icon: '💬' },
-    { id: 'agents', label: 'Agents', icon: '🤖' },
-    { id: 'settings', label: 'Settings', icon: '⚙️' },
+    { id: 'dashboard', label: 'Overview', icon: 'overview' },
+    { id: 'chat', label: 'Run agent', icon: 'run' },
+    { id: 'agents', label: 'Agents', icon: 'agents' },
   ]
+
+  const pageTitle = useMemo(() => ({
+    dashboard: 'Overview',
+    chat: 'Run agent',
+    agents: 'Agents',
+    settings: 'Profile',
+  }[activeTab] || 'Overview'), [activeTab])
+
+  const notify = useCallback((message, tone = 'success') => {
+    setToast({ id: Date.now(), message, tone })
+  }, [])
+  const closeCreateAgent = useCallback(() => setCreateAgentOpen(false), [])
+  const openCreateAgent = useCallback(() => setCreateAgentOpen(true), [])
+  const openAccount = useCallback(() => setActiveTab('settings'), [])
+  const openAgents = useCallback(() => setActiveTab('agents'), [])
+  const closeSidebar = useCallback(() => setSidebarOpen(false), [])
+  const clearSelectedAgent = useCallback(() => setSelectedAgentId(null), [])
+
+  useEffect(() => {
+    if (!toast) return undefined
+    const timer = window.setTimeout(() => setToast(null), 3500)
+    return () => window.clearTimeout(timer)
+  }, [toast])
+
+  const runAgent = useCallback((agentId, isCoordinator = false) => {
+    setSelectedAgentId(isCoordinator ? null : String(agentId))
+    setSelectedHostAgentId(isCoordinator ? String(agentId) : null)
+    setActiveTab('chat')
+  }, [])
+
+  const viewAgent = useCallback((agent) => {
+    setSelectedAgentId(String(agent.agent_id || agent.id))
+    setSelectedHostAgentId(null)
+    setActiveTab('agents')
+  }, [])
+
+  const handleAgentCreated = useCallback(() => {
+    setAgentRefreshKey((key) => key + 1)
+    setActiveTab('agents')
+    notify('Agent created')
+  }, [notify])
 
   const renderContent = () => {
     switch (activeTab) {
       case 'dashboard':
-        return <Dashboard />
+        return (
+          <Dashboard
+            onExecuteAgent={runAgent}
+            onViewAgent={viewAgent}
+            onViewAgents={openAgents}
+            onCreateAgent={openCreateAgent}
+            onToast={notify}
+          />
+        )
       case 'chat':
-        return <ChatPlayground />
+        return (
+          <ChatPlayground
+            initialAgentId={selectedAgentId}
+            initialHostAgentId={selectedHostAgentId}
+            onToast={notify}
+          />
+        )
       case 'agents':
-        return <AgentComponent />
+        return (
+          <AgentComponent
+            selectedAgentId={selectedAgentId}
+            onExecuteAgent={runAgent}
+            onSelectionHandled={clearSelectedAgent}
+            onCreateAgent={openCreateAgent}
+            onToast={notify}
+            refreshKey={agentRefreshKey}
+          />
+        )
       case 'settings':
-        return <Settings />
+        return <Settings user={user} />
       default:
         return <Dashboard />
     }
@@ -76,51 +164,72 @@ const App = () => {
 
   if (user === undefined) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-slate-500">
-        Loading...
+      <div className="loading-screen" role="status">
+        <span className="skeleton h-4 w-32" />
+        <span className="sr-only">Loading Agno Hub</span>
       </div>
     )
   }
 
   if (user === null) {
-    return <Login onAuthenticated={setUser} />
+    return (
+      <Login
+        notice={authNotice}
+        onAuthenticated={(authenticatedUser) => {
+          setAuthNotice(null)
+          setUser(authenticatedUser)
+        }}
+      />
+    )
   }
 
   return (
-    <div className="min-h-screen gradient-hero">
+    <div className="app-shell">
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <Header
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
-        user={user}
-        onSignOut={signOut}
+        currentPage={pageTitle}
+        onCreateAgent={openCreateAgent}
       />
 
-      <div className="flex pt-16 h-[calc(100vh-64px)]">
-        {/* Sidebar */}
+      <div className="app-workspace">
         <Sidebar
+          isDesktop={isDesktop}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           tabs={tabs}
           isOpen={sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
+          onClose={closeSidebar}
+          user={user}
+          onOpenAccount={openAccount}
+          onSignOut={signOut}
+          createAgentOpen={createAgentOpen}
+          onCloseCreateAgent={closeCreateAgent}
+          onAgentCreated={handleAgentCreated}
         />
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-auto">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.3 }}
-              className="p-6"
-            >
-              {renderContent()}
-            </motion.div>
-          </AnimatePresence>
+        <main className="app-main" id="main-content" tabIndex="-1">
+          <div className="app-content" key={activeTab}>
+            {renderContent()}
+          </div>
         </main>
       </div>
+      {toast && (
+        <div className="toast-region" aria-live="polite">
+          <div className={`toast ${toast.tone === 'danger' ? 'toast-danger' : ''}`} role="status">
+            <span>{toast.message}</span>
+            <button
+              type="button"
+              className="icon-button"
+              onClick={() => setToast(null)}
+              aria-label="Dismiss notification"
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

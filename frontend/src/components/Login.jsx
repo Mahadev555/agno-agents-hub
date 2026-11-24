@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { motion } from 'framer-motion'
 import { LogIn, UserPlus } from 'lucide-react'
 import { authService } from '../services/api'
 
@@ -9,7 +8,7 @@ import { authService } from '../services/api'
  * The API requires a bearer token on every endpoint, so nothing in the app is
  * reachable until this succeeds.
  */
-const Login = ({ onAuthenticated }) => {
+const Login = ({ onAuthenticated, notice }) => {
   const [mode, setMode] = useState('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -38,23 +37,27 @@ const Login = ({ onAuthenticated }) => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 bg-slate-50">
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
+    <div className="login-screen">
+      <section
         className="card p-8 w-full max-w-md space-y-6"
       >
         <div>
-          <h1 className="text-3xl font-bold gradient-text">Agno Hub</h1>
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Agno Hub</h1>
           <p className="text-slate-600 mt-1">
             {isRegister ? 'Create an account to get started' : 'Sign in to continue'}
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {notice && (
+            <div className="feedback-warning" role="status">
+              {notice}
+            </div>
+          )}
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+            <label htmlFor="login-email" className="block text-sm font-medium text-slate-700 mb-1">Email</label>
             <input
+              id="login-email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
@@ -67,10 +70,11 @@ const Login = ({ onAuthenticated }) => {
 
           {isRegister && (
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">
+              <label htmlFor="display-name" className="block text-sm font-medium text-slate-700 mb-1">
                 Display name <span className="text-slate-400">(optional)</span>
               </label>
               <input
+                id="display-name"
                 type="text"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
@@ -81,8 +85,9 @@ const Login = ({ onAuthenticated }) => {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+            <label htmlFor="login-password" className="block text-sm font-medium text-slate-700 mb-1">Password</label>
             <input
+              id="login-password"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
@@ -100,7 +105,7 @@ const Login = ({ onAuthenticated }) => {
           </div>
 
           {error && (
-            <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
+            <div className="feedback-error" role="alert">
               {error}
             </div>
           )}
@@ -110,7 +115,9 @@ const Login = ({ onAuthenticated }) => {
             disabled={busy || !email.trim() || !password}
             className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            {isRegister ? <UserPlus size={18} /> : <LogIn size={18} />}
+            {isRegister
+              ? <UserPlus size={16} strokeWidth={1.5} aria-hidden="true" />
+              : <LogIn size={16} strokeWidth={1.5} aria-hidden="true" />}
             {busy ? 'Please wait...' : isRegister ? 'Create account' : 'Sign in'}
           </button>
         </form>
@@ -121,11 +128,11 @@ const Login = ({ onAuthenticated }) => {
             setMode(isRegister ? 'login' : 'register')
             setError(null)
           }}
-          className="text-sm text-primary-600 hover:underline w-full text-center"
+          className="w-full text-center text-sm text-brand-text hover:underline"
         >
           {isRegister ? 'Already have an account? Sign in' : 'Need an account? Register'}
         </button>
-      </motion.div>
+      </section>
     </div>
   )
 }
