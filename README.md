@@ -259,7 +259,10 @@ python -m pytest tests/ -v
 docker compose up --build
 ```
 
-The image builds the React app and serves it from the API, so there is one artifact. It runs migrations on start, drops to a non-root user, and exposes a healthcheck.
+Compose runs the frontend and API as separate services. Open the UI at
+`http://localhost:3000`; the API is available at `http://localhost:5000`.
+The API image runs migrations on start, drops to a non-root user, and exposes a
+healthcheck.
 
 `WEB_CONCURRENCY` is **1** by default: the run event bus is in-process, so an SSE subscriber must reach the worker executing its run. Scaling out requires moving the bus to Redis first (see `services/run_bus.py`).
 

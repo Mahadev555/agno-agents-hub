@@ -13,7 +13,7 @@ For the project overview see the [root README](../README.md); for the API see th
 ```
 frontend/
 ├── index.html               Vite entry HTML
-├── vite.config.js           Dev server on :3000, /api proxy to :5000
+├── vite.config.js           Dev server on :3000; production output to dist/
 ├── tailwind.config.js
 ├── postcss.config.js
 ├── src/
@@ -22,12 +22,14 @@ frontend/
 │   ├── index.css            Tailwind + shared classes
 │   ├── components/
 │   │   ├── Login.jsx        Sign in / register
-│   │   ├── Header.jsx       Top bar, account menu, sign out
-│   │   ├── Sidebar.jsx      Navigation + create-agent modal
-│   │   ├── Dashboard.jsx    Counts and overview
-│   │   ├── AgentComponent.jsx  Agent cards
+│   │   ├── Header.jsx       Breadcrumb and global create action
+│   │   ├── Sidebar.jsx      Navigation and account menu
+│   │   ├── AgentCreateModal.jsx  Agent creation form
+│   │   ├── Dashboard.jsx    Overview counts and recent agents
+│   │   ├── AgentComponent.jsx  Agent catalog and details
+│   │   ├── AgentTable.jsx   Responsive agent list and loading skeleton
 │   │   ├── ChatPlayground.jsx  Run agents/teams with streamed output
-│   │   ├── Settings.jsx
+│   │   ├── Settings.jsx     Account profile
 │   │   ├── Button.jsx
 │   │   └── index.js
 │   ├── hooks/
@@ -37,6 +39,13 @@ frontend/
 │       └── api.js           HTTP client, auth, SSE
 └── public/
 ```
+
+The interface uses bundled Inter, neutral CSS-variable design tokens in
+`src/index.css`, and Tailwind mappings in `tailwind.config.js`. Light and dark
+colors follow the operating-system preference.
+The desktop sidebar stays pinned; it becomes a drawer below 1024px.
+The production build writes to `frontend/dist`. FastAPI serves only the API;
+Docker Compose serves the built frontend from its own Nginx container.
 
 ---
 
@@ -58,15 +67,10 @@ The backend must be running on `http://localhost:5000`.
 
 ### Configuration
 
-`.env`:
-
-```env
-VITE_API_URL=http://localhost:5000
-```
-
-Because this is an absolute URL, requests go **directly** to the API and bypass the Vite proxy — so they are cross-origin and CORS applies. The backend must list this app's origin in `CORS_ALLOW_ORIGINS`; `http://localhost:3000` is included by default.
-
-Leave `VITE_API_URL` unset to use the `/api` proxy in `vite.config.js` instead, which makes requests same-origin.
+By default, the app requests the API at `/api`. Vite proxies this path to the
+local backend during development; the frontend's Nginx container proxies it to
+the API service in Docker Compose. Set `VITE_API_URL` to an absolute API URL
+only when the API is hosted on a different origin.
 
 ---
 
@@ -98,6 +102,12 @@ The first account registered on a fresh deployment becomes an **administrator**.
 ## Running agents
 
 `ChatPlayground.jsx` uses the streaming API. Both single-agent and team modes go through one path:
+
+The dashboard and agent catalog share the same agent cards. **Run** opens the execution
+view with the selected agent; coordinator agents open team setup. **Details** shows the
+agent configuration summary. Account actions are limited to data currently supported by
+the API; unsupported notification, theme, and security settings are not presented as
+working controls.
 
 ```js
 const run = await runService.start(prompt, { agentIds, hostAgentId })

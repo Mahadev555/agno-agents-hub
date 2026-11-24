@@ -1,5 +1,5 @@
-# Local container run. The application image builds the React app and serves it
-# from the API, so this is a single service plus an optional local database.
+# Local container run. The frontend and API are separate services, with an
+# optional local database.
 #
 #   docker compose up --build
 #
@@ -20,13 +20,25 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set - generate with python -c "import secrets; print(secrets.token_urlsafe(48))"}
       ENVIRONMENT: ${ENVIRONMENT:-production}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:5000}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
       RUN_RATE_LIMIT_PER_HOUR: ${RUN_RATE_LIMIT_PER_HOUR:-60}
       WEB_CONCURRENCY: 1
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+    ports:
+      - "3000:80"
+    depends_on:
+      - api
     restart: unless-stopped
 
   db:

@@ -1,14 +1,3 @@
-# Build the React app, then serve it from the API container so there is one
-# artifact to deploy.
-FROM node:22-slim AS frontend
-
-WORKDIR /frontend
-COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm ci || npm install
-COPY frontend/ ./
-RUN npm run build
-
-
 FROM python:3.12-slim AS runtime
 
 # Bytecode caching off and unbuffered output so logs appear in `docker logs`
@@ -29,7 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt gunicorn \
     && apt-get purge -y --auto-remove build-essential
 
 COPY backend/ ./
-COPY --from=frontend /frontend/dist ./static
 
 # Run as a non-root user: a container process that does not need root should
 # not have it.

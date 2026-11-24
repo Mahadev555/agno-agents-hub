@@ -1,6 +1,16 @@
 import axios from 'axios'
+import { AGENT_TYPES } from './agentTypes'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+export {
+  AGENT_TYPES,
+  AGENT_TYPE_LABELS,
+  countAgentsByType,
+  getAgentType,
+  getAgentTypeLabel,
+  isCoordinatorAgent,
+} from './agentTypes'
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 // CRUD calls are fast. Agent execution is not: a coordinated team run routinely
 // takes 20-60s because it is several sequential LLM calls. A single 30s timeout
@@ -12,6 +22,28 @@ const EXECUTION_TIMEOUT = 300000
 // the page, so it is only as safe as the app's XSS posture; httpOnly cookies
 // would be stronger but need CSRF handling and a same-site deployment.
 const TOKEN_KEY = 'agnohub.token'
+
+export const buildLatestRunByAgent = (runs) => {
+  const latest = {}
+  for (const run of runs) {
+    const startedAt = run.started_at || run.created_at
+    const startedAtTime = Date.parse(startedAt)
+    if (!Number.isFinite(startedAtTime)) continue
+    const ids = [
+      ...(Array.isArray(run.agent_ids) ? run.agent_ids : []),
+      run.host_agent_id,
+    ].filter((id) => id !== null && id !== undefined)
+
+    for (const id of ids) {
+      const key = String(id)
+      const current = latest[key]
+      if (!current || startedAtTime > Date.parse(current)) {
+        latest[key] = startedAt
+      }
+    }
+  }
+  return latest
+}
 
 export const tokenStore = {
   get: () => localStorage.getItem(TOKEN_KEY),
@@ -53,11 +85,14 @@ api.interceptors.request.use((config) => {
  */
 const extractErrorMessage = (error) => {
   if (error.code === 'ECONNABORTED') {
-    return 'The request timed out. The agent may still be running on the server.'
+    return error.config?.timeout === EXECUTION_TIMEOUT
+      ? 'The execution request timed out. The agent may still be running on the server.'
+      : 'The request timed out. Check your connection and try again.'
   }
 
   if (!error.response) {
-    return `Cannot reach the API at ${API_BASE_URL}. Is the backend running?`
+    const location = API_BASE_URL ? ` at ${API_BASE_URL}` : ''
+    return `Cannot reach the API${location}. Is the backend running?`
   }
 
   const { detail } = error.response.data || {}
@@ -125,7 +160,13 @@ export const agentService = {
 
   getHostAgents: async () => {
     const response = await api.get('/api/host-agents')
-    return response.data || []
+    return Array.isArray(response.data)
+      ? response.data.map((agent) => ({
+        ...agent,
+        kind: AGENT_TYPES.COORDINATOR,
+        agent_type: AGENT_TYPES.COORDINATOR,
+      }))
+      : []
   },
 
   getAgentById: async (agentId) => {
