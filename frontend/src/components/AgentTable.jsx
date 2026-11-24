@@ -203,6 +203,7 @@ const AgentTable = ({
             </thead>
             <tbody>
               {visibleAgents.map((agent) => {
+                const id = agent.agent_id || agent.id
                 const active = agent.is_active !== false
                 return (
                   <tr
@@ -241,6 +242,7 @@ const AgentTable = ({
               <SortButton label="Last run" sortKey="lastRun" sort={sort} onSort={toggleSort} />
             </div>
             {visibleAgents.map((agent) => {
+              const id = agent.agent_id || agent.id
               const active = agent.is_active !== false
               return (
                 <article
