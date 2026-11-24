@@ -13,7 +13,7 @@ For the project overview see the [root README](../README.md); for the API see th
 ```
 frontend/
 ├── index.html               Vite entry HTML
-├── vite.config.js           Dev server on :3000, /api proxy to :5000
+├── vite.config.js           Dev server on :3000; production output to backend/static
 ├── tailwind.config.js
 ├── postcss.config.js
 ├── src/
@@ -40,9 +40,12 @@ frontend/
 └── public/
 ```
 
-The interface uses bundled Inter, shared CSS-variable design tokens in
+The interface uses bundled Inter, neutral CSS-variable design tokens in
 `src/index.css`, and Tailwind mappings in `tailwind.config.js`. Light and dark
 colors follow the operating-system preference.
+The desktop sidebar stays pinned; it becomes a drawer below 1024px.
+The production build writes directly to `../backend/static`, which FastAPI
+serves at `/`.
 
 ---
 
@@ -58,7 +61,7 @@ The backend must be running on `http://localhost:5000`.
 | Script | Does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm run build` | Production build to `dist/` |
+| `npm run build` | Production build to `../backend/static` |
 | `npm run preview` | Serve the built output |
 | `npm run lint` | ESLint over `src` |
 

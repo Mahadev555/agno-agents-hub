@@ -33,12 +33,6 @@ export default {
           800: 'var(--slate-800)',
           900: 'var(--slate-900)',
         },
-        blue: {
-          50: 'var(--ui-brand-subtle)',
-          100: 'var(--ui-brand-subtle)',
-          600: 'var(--ui-brand-fill)',
-          700: 'var(--ui-brand-hover)',
-        },
         red: {
           50: 'var(--ui-danger-subtle)',
           100: 'var(--ui-danger-subtle)',

@@ -63,7 +63,9 @@ const AgentTable = ({ agents, lastRuns = {}, onRun, onDetails }) => (
               <td>
                 <div className="table-actions">
                   <Button
+                    variant="ghost"
                     size="sm"
+                    className="button-run"
                     disabled={!active}
                     onClick={() => onRun?.(id, coordinator)}
                   >
@@ -104,7 +106,15 @@ const AgentTable = ({ agents, lastRuns = {}, onRun, onDetails }) => (
               <div><dt>Last run</dt><dd>{getLastRun(agent, lastRuns)}</dd></div>
             </dl>
             <div className="table-actions">
-              <Button size="sm" disabled={!active} onClick={() => onRun?.(id, coordinator)}>Run</Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="button-run"
+                disabled={!active}
+                onClick={() => onRun?.(id, coordinator)}
+              >
+                Run
+              </Button>
               <button type="button" className="table-details" onClick={() => onDetails?.(agent)}>
                 Details
               </button>

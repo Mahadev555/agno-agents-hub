@@ -25,7 +25,7 @@ const App = () => {
   const [authNotice, setAuthNotice] = useState(null)
 
   useEffect(() => {
-    setSidebarOpen(isDesktop)
+    if (isDesktop) setSidebarOpen(false)
   }, [isDesktop])
 
   const signOut = useCallback(() => {
@@ -187,9 +187,9 @@ const App = () => {
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
       <Header
+        isDesktop={isDesktop}
         sidebarOpen={sidebarOpen}
         setSidebarOpen={setSidebarOpen}
-        currentPage={pageTitle}
         onCreateAgent={openCreateAgent}
       />
 
@@ -211,6 +211,7 @@ const App = () => {
 
         <main className="app-main" id="main-content" tabIndex="-1">
           <div className="app-content" key={activeTab}>
+            <h1 className="page-title">{pageTitle}</h1>
             {renderContent()}
           </div>
         </main>

@@ -94,7 +94,7 @@ const Sidebar = ({
   return (
     <>
       {isDesktop
-        ? isOpen && navigation
+        ? navigation
         : isOpen && (
           <>
             <button

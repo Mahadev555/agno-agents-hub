@@ -68,7 +68,17 @@ const Dashboard = ({ onExecuteAgent, onViewAgent, onViewAgents, onCreateAgent, o
 
   return (
     <div className="page-stack">
-      <div className="flex justify-end">
+      <div className="overview-summary">
+        <section className="metric-row" aria-label="Agent counts">
+          {stats.map(({ label, value }) => (
+            <div className="metric-item" key={label}>
+              <span className="metric-value">
+                {(loading || error) && allAgents.length === 0 ? '—' : value}
+              </span>
+              <span className="metric-label">{label}</span>
+            </div>
+          ))}
+        </section>
         <Button
           variant="secondary"
           size="sm"
@@ -79,17 +89,6 @@ const Dashboard = ({ onExecuteAgent, onViewAgent, onViewAgents, onCreateAgent, o
           Refresh
         </Button>
       </div>
-
-      <section className="metric-row" aria-label="Agent counts">
-        {stats.map(({ label, value }) => (
-          <div className="metric-item" key={label}>
-            <span className="metric-value">
-              {(loading || error) && allAgents.length === 0 ? '—' : value}
-            </span>
-            <span className="metric-label">{label}</span>
-          </div>
-        ))}
-      </section>
 
       {error && (
         <div className="feedback-error" role="alert">

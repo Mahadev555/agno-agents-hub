@@ -1,6 +1,6 @@
 const Settings = ({ user }) => (
-  <section className="account-page surface" aria-labelledby="account-title">
-    <h1 id="account-title" className="section-title">Profile</h1>
+  <section className="account-page surface" aria-labelledby="account-details-title">
+    <h2 id="account-details-title" className="section-title">Account details</h2>
     <dl className="agent-details-grid">
       <div>
         <dt>Name</dt>
