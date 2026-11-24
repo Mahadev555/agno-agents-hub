@@ -1,70 +1,38 @@
-import { useCallback, useEffect, useState } from 'react'
-import {
-  agentService,
-  buildLatestRunByAgent,
-  isCoordinatorAgent,
-  runService,
-} from '../services/api'
+import { AGENT_TYPE_LABELS, countAgentsByType } from '../services/agentTypes'
+import { useAgentCatalog } from '../hooks/useAgentCatalog'
 import Button from './Button'
 import AgentTable, { AgentTableSkeleton } from './AgentTable'
+import RefreshButton from './RefreshButton'
 
 const Dashboard = ({ onExecuteAgent, onViewAgent, onViewAgents, onCreateAgent, onToast }) => {
-  const [agents, setAgents] = useState([])
-  const [hostAgents, setHostAgents] = useState([])
-  const [lastRuns, setLastRuns] = useState({})
-  const [runHistoryError, setRunHistoryError] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-
-  const loadAgents = useCallback(async (notify = false) => {
-    setLoading(true)
-    setError(null)
-    try {
-      const [agentsData, hostAgentsData] = await Promise.all([
-        agentService.getAgents(),
-        agentService.getHostAgents(),
-      ])
-      setAgents(Array.isArray(agentsData) ? agentsData.filter(agent => !isCoordinatorAgent(agent)) : [])
-      setHostAgents(Array.isArray(hostAgentsData) ? hostAgentsData : [])
-      let historyLoaded = true
-      try {
-        const runs = await runService.list(200)
-        setLastRuns(buildLatestRunByAgent(Array.isArray(runs) ? runs : []))
-        setRunHistoryError(null)
-      } catch (historyRequestError) {
-        console.error('Failed to fetch recent runs:', historyRequestError)
-        setLastRuns({})
-        setRunHistoryError('Recent run data is unavailable.')
-        historyLoaded = false
-      }
-      if (notify) {
-        onToast?.(
-          historyLoaded ? 'Overview refreshed' : 'Overview refreshed without run details',
-          historyLoaded ? 'success' : 'danger'
-        )
-      }
-    } catch (requestError) {
-      console.error('Failed to fetch agents:', requestError)
-      const message = requestError.message || 'Could not load agents.'
-      setError(message)
-      if (notify) onToast?.('Could not refresh overview', 'danger')
-    } finally {
-      setLoading(false)
-    }
-  }, [onToast])
-
-  useEffect(() => {
-    loadAgents()
-  }, [loadAgents])
-
-  const allAgents = [...agents, ...hostAgents]
+  const {
+    allAgents,
+    lastRuns,
+    runHistoryError,
+    loading,
+    error,
+    refresh,
+  } = useAgentCatalog()
+  const agentCounts = countAgentsByType(allAgents)
   const stats = [
     { label: 'Total agents', value: allAgents.length },
-    { label: 'Individual', value: agents.length },
-    { label: 'Coordinators', value: hostAgents.length },
+    ...Object.entries(AGENT_TYPE_LABELS).map(([type, label]) => ({
+      label,
+      value: agentCounts[type],
+    })),
   ]
 
-  const handleRefresh = () => loadAgents(true)
+  const handleRefresh = async () => {
+    const result = await refresh()
+    if (!result.success) {
+      onToast?.('Could not refresh overview', 'danger')
+      return
+    }
+    onToast?.(
+      result.historyLoaded ? 'Overview refreshed' : 'Overview refreshed without run details',
+      result.historyLoaded ? 'success' : 'danger'
+    )
+  }
 
   return (
     <div className="page-stack">
@@ -79,15 +47,7 @@ const Dashboard = ({ onExecuteAgent, onViewAgent, onViewAgents, onCreateAgent, o
             </div>
           ))}
         </section>
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={loading}
-          aria-label="Refresh overview"
-        >
-          Refresh
-        </Button>
+        <RefreshButton loading={loading} onClick={handleRefresh} />
       </div>
 
       {error && (
@@ -104,7 +64,7 @@ const Dashboard = ({ onExecuteAgent, onViewAgent, onViewAgents, onCreateAgent, o
       )}
 
       {loading && allAgents.length === 0 ? (
-        <AgentTableSkeleton />
+        <AgentTableSkeleton rows={5} />
       ) : allAgents.length === 0 && !error ? (
         <section className="empty-state">
           <h2 className="section-title">No agents yet</h2>
@@ -114,12 +74,17 @@ const Dashboard = ({ onExecuteAgent, onViewAgent, onViewAgents, onCreateAgent, o
       ) : allAgents.length > 0 ? (
         <section className="page-stack" aria-labelledby="overview-agents-title">
           <div className="flex items-center justify-between gap-4">
-            <h2 id="overview-agents-title" className="section-title">Agents</h2>
+            <h2 id="overview-agents-title" className="section-title">
+              {Object.keys(lastRuns).length > 0 ? 'Recently used agents' : 'Agents'}
+            </h2>
             <button type="button" className="table-details" onClick={onViewAgents}>View all</button>
           </div>
           <AgentTable
             agents={allAgents}
             lastRuns={lastRuns}
+            limit={5}
+            initialSort="lastRun"
+            initialDirection="desc"
             onRun={onExecuteAgent}
             onDetails={onViewAgent}
           />

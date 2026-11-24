@@ -1,5 +1,13 @@
 import { useEffect, useRef } from 'react'
-import { Bot, LayoutDashboard, LogOut, MessageSquare, UserCircle } from 'lucide-react'
+import {
+  Bot,
+  ChevronDown,
+  LayoutDashboard,
+  LogOut,
+  MessageSquare,
+  Settings as SettingsIcon,
+  UserCircle,
+} from 'lucide-react'
 import AgentCreateModal from './AgentCreateModal'
 
 const icons = {
@@ -66,20 +74,24 @@ const Sidebar = ({
 
       <div className="account-area">
         <details ref={accountRef}>
-          <summary className="account-trigger" aria-label="Open account menu">
+          <summary className="account-trigger" aria-label="Account menu">
             <span className="user-avatar" aria-hidden="true">{initials}</span>
             <span className="min-w-0 flex-1 truncate text-sm font-medium">{displayName}</span>
-            <UserCircle size={16} strokeWidth={1.5} aria-hidden="true" />
+            <ChevronDown className="account-chevron" size={16} strokeWidth={1.5} aria-hidden="true" />
           </summary>
           <div className="account-popover">
-            <div className="border-b border-slate-200 px-2 py-2">
-              <p className="truncate text-sm font-medium text-slate-800">{displayName}</p>
-              <p className="truncate text-xs text-slate-500">{user?.email}</p>
-              {user?.is_admin && <p className="mt-1 text-xs text-slate-500">Administrator</p>}
+            <div className="border-b border-border px-2 py-2">
+              <p className="truncate text-sm font-medium text-primary">{displayName}</p>
+              <p className="truncate text-xs text-muted">{user?.email}</p>
+              {user?.is_admin && <p className="mt-1 text-xs text-muted">Administrator</p>}
             </div>
             <button type="button" onClick={openAccount}>
               <UserCircle size={16} strokeWidth={1.5} aria-hidden="true" />
               Profile
+            </button>
+            <button type="button" onClick={openAccount}>
+              <SettingsIcon size={16} strokeWidth={1.5} aria-hidden="true" />
+              Settings
             </button>
             <button type="button" onClick={onSignOut}>
               <LogOut size={16} strokeWidth={1.5} aria-hidden="true" />

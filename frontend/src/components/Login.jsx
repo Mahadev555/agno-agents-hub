@@ -42,8 +42,8 @@ const Login = ({ onAuthenticated, notice }) => {
         className="card p-8 w-full max-w-md space-y-6"
       >
         <div>
-          <h1 className="text-3xl font-semibold tracking-tight text-slate-900">Agno Hub</h1>
-          <p className="text-slate-600 mt-1">
+          <h1 className="text-3xl font-semibold tracking-tight text-primary">Agno Hub</h1>
+          <p className="text-secondary mt-1">
             {isRegister ? 'Create an account to get started' : 'Sign in to continue'}
           </p>
         </div>
@@ -55,7 +55,7 @@ const Login = ({ onAuthenticated, notice }) => {
             </div>
           )}
           <div>
-            <label htmlFor="login-email" className="block text-sm font-medium text-slate-700 mb-1">Email</label>
+            <label htmlFor="login-email" className="block text-sm font-medium text-secondary mb-1">Email</label>
             <input
               id="login-email"
               type="email"
@@ -70,8 +70,8 @@ const Login = ({ onAuthenticated, notice }) => {
 
           {isRegister && (
             <div>
-              <label htmlFor="display-name" className="block text-sm font-medium text-slate-700 mb-1">
-                Display name <span className="text-slate-400">(optional)</span>
+              <label htmlFor="display-name" className="block text-sm font-medium text-secondary mb-1">
+                Display name <span className="text-muted">(optional)</span>
               </label>
               <input
                 id="display-name"
@@ -85,7 +85,7 @@ const Login = ({ onAuthenticated, notice }) => {
           )}
 
           <div>
-            <label htmlFor="login-password" className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+            <label htmlFor="login-password" className="block text-sm font-medium text-secondary mb-1">Password</label>
             <input
               id="login-password"
               type="password"
@@ -98,7 +98,7 @@ const Login = ({ onAuthenticated, notice }) => {
               disabled={busy}
             />
             {isRegister && (
-              <p className="text-xs text-slate-500 mt-1">
+              <p className="text-xs text-muted mt-1">
                 At least 10 characters. A long passphrase beats a short complex one.
               </p>
             )}
@@ -128,7 +128,7 @@ const Login = ({ onAuthenticated, notice }) => {
             setMode(isRegister ? 'login' : 'register')
             setError(null)
           }}
-          className="w-full text-center text-sm text-brand-text hover:underline"
+          className="w-full text-center text-sm text-brand hover:underline"
         >
           {isRegister ? 'Already have an account? Sign in' : 'Need an account? Register'}
         </button>

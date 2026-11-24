@@ -16,6 +16,7 @@ const Header = ({ isDesktop, sidebarOpen, setSidebarOpen, onCreateAgent }) => (
           <Menu size={16} strokeWidth={1.5} aria-hidden="true" />
         </button>
       )}
+      <img className="header-logo" src="/agno-icon.svg" alt="" />
       <span>Agno Hub</span>
     </div>
 

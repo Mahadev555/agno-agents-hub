@@ -6,6 +6,8 @@ import ChatPlayground from './components/ChatPlayground'
 import AgentComponent from './components/AgentComponent'
 import Settings from './components/Settings'
 import Login from './components/Login'
+import PageContainer from './components/PageContainer'
+import PageHeader from './components/PageHeader'
 import { authService, setUnauthenticatedHandler } from './services/api'
 import { useMediaQuery } from './hooks/useMediaQuery'
 import { X } from 'lucide-react'
@@ -89,6 +91,10 @@ const App = () => {
     agents: 'Agents',
     settings: 'Profile',
   }[activeTab] || 'Overview'), [activeTab])
+
+  useEffect(() => {
+    document.title = user ? `${pageTitle} · Agno Hub` : 'Agno Hub'
+  }, [pageTitle, user])
 
   const notify = useCallback((message, tone = 'success') => {
     setToast({ id: Date.now(), message, tone })
@@ -210,10 +216,10 @@ const App = () => {
         />
 
         <main className="app-main" id="main-content" tabIndex="-1">
-          <div className="app-content" key={activeTab}>
-            <h1 className="page-title">{pageTitle}</h1>
+          <PageContainer key={activeTab}>
+            <PageHeader title={pageTitle} />
             {renderContent()}
-          </div>
+          </PageContainer>
         </main>
       </div>
       {toast && (

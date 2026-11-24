@@ -130,7 +130,7 @@ const AgentCreateModal = ({ open, onClose, onCreated }) => {
         aria-labelledby="create-agent-title"
         className="modal-panel"
       >
-        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div>
             <h2 id="create-agent-title" className="section-title">Create agent</h2>
           </div>
@@ -192,11 +192,11 @@ const AgentCreateModal = ({ open, onClose, onCreated }) => {
           </div>
 
           <div className="flex flex-wrap items-end gap-4 pb-2">
-            <label className="flex items-center gap-2 text-sm text-slate-600">
+            <label className="flex items-center gap-2 text-sm text-secondary">
               <input type="checkbox" checked={form.markdown} onChange={update('markdown')} disabled={busy} />
               Markdown
             </label>
-            <label className="flex items-center gap-2 text-sm text-slate-600">
+            <label className="flex items-center gap-2 text-sm text-secondary">
               <input type="checkbox" checked={form.showToolCalls} onChange={update('showToolCalls')} disabled={busy} />
               Show tool calls
             </label>
@@ -206,7 +206,7 @@ const AgentCreateModal = ({ open, onClose, onCreated }) => {
             <div className="feedback-error sm:col-span-2" role="alert">{error}</div>
           )}
 
-          <div className="flex justify-end gap-2 border-t border-slate-200 pt-4 sm:col-span-2">
+          <div className="flex justify-end gap-2 border-t border-border pt-4 sm:col-span-2">
             <Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
             <Button type="submit" disabled={busy} loading={busy}>
               {busy ? 'Creating…' : 'Create agent'}

@@ -1,4 +1,14 @@
 import axios from 'axios'
+import { AGENT_TYPES } from './agentTypes'
+
+export {
+  AGENT_TYPES,
+  AGENT_TYPE_LABELS,
+  countAgentsByType,
+  getAgentType,
+  getAgentTypeLabel,
+  isCoordinatorAgent,
+} from './agentTypes'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
 
@@ -13,14 +23,12 @@ const EXECUTION_TIMEOUT = 300000
 // would be stronger but need CSRF handling and a same-site deployment.
 const TOKEN_KEY = 'agnohub.token'
 
-export const isCoordinatorAgent = (agent) =>
-  agent?.kind === 'host' || agent?.agent_type === 'host'
-
 export const buildLatestRunByAgent = (runs) => {
   const latest = {}
   for (const run of runs) {
     const startedAt = run.started_at || run.created_at
-    if (!startedAt) continue
+    const startedAtTime = Date.parse(startedAt)
+    if (!Number.isFinite(startedAtTime)) continue
     const ids = [
       ...(Array.isArray(run.agent_ids) ? run.agent_ids : []),
       run.host_agent_id,
@@ -29,7 +37,7 @@ export const buildLatestRunByAgent = (runs) => {
     for (const id of ids) {
       const key = String(id)
       const current = latest[key]
-      if (!current || new Date(startedAt) > new Date(current)) {
+      if (!current || startedAtTime > Date.parse(current)) {
         latest[key] = startedAt
       }
     }
@@ -151,7 +159,13 @@ export const agentService = {
 
   getHostAgents: async () => {
     const response = await api.get('/api/host-agents')
-    return response.data || []
+    return Array.isArray(response.data)
+      ? response.data.map((agent) => ({
+        ...agent,
+        kind: AGENT_TYPES.COORDINATOR,
+        agent_type: AGENT_TYPES.COORDINATOR,
+      }))
+      : []
   },
 
   getAgentById: async (agentId) => {
