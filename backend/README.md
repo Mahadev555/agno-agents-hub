@@ -283,7 +283,11 @@ python -m pytest tests/ -v
 docker compose up --build
 ```
 
-The image builds the frontend and serves it from the API. Migrations run on start; the process drops to a non-root user.
+Compose runs the frontend and API in separate containers. Open the frontend at
+`http://localhost:3000`; the API remains available at `http://localhost:5000`.
+Migrations run on API startup, and the API process drops to a non-root user.
+The frontend proxies `/api` to the API by default. Set `VITE_API_URL` at build
+time only when the API is hosted on a different origin.
 
 `WEB_CONCURRENCY=1` is deliberate: `run_bus` is in-process, so an SSE subscriber must reach the worker executing its run. Moving the bus to Redis is the prerequisite for more workers.
 

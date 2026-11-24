@@ -10,7 +10,7 @@ export {
   isCoordinatorAgent,
 } from './agentTypes'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000'
+const API_BASE_URL = import.meta.env.VITE_API_URL || ''
 
 // CRUD calls are fast. Agent execution is not: a coordinated team run routinely
 // takes 20-60s because it is several sequential LLM calls. A single 30s timeout
@@ -91,7 +91,8 @@ const extractErrorMessage = (error) => {
   }
 
   if (!error.response) {
-    return `Cannot reach the API at ${API_BASE_URL}. Is the backend running?`
+    const location = API_BASE_URL ? ` at ${API_BASE_URL}` : ''
+    return `Cannot reach the API${location}. Is the backend running?`
   }
 
   const { detail } = error.response.data || {}

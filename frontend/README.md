@@ -13,7 +13,7 @@ For the project overview see the [root README](../README.md); for the API see th
 ```
 frontend/
 ├── index.html               Vite entry HTML
-├── vite.config.js           Dev server on :3000; production output to backend/static
+├── vite.config.js           Dev server on :3000; production output to dist/
 ├── tailwind.config.js
 ├── postcss.config.js
 ├── src/
@@ -44,8 +44,8 @@ The interface uses bundled Inter, neutral CSS-variable design tokens in
 `src/index.css`, and Tailwind mappings in `tailwind.config.js`. Light and dark
 colors follow the operating-system preference.
 The desktop sidebar stays pinned; it becomes a drawer below 1024px.
-The production build writes directly to `../backend/static`, which FastAPI
-serves at `/`.
+The production build writes to `frontend/dist`. FastAPI serves only the API;
+Docker Compose serves the built frontend from its own Nginx container.
 
 ---
 
@@ -61,21 +61,16 @@ The backend must be running on `http://localhost:5000`.
 | Script | Does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm run build` | Production build to `../backend/static` |
+| `npm run build` | Production build to `dist/` |
 | `npm run preview` | Serve the built output |
 | `npm run lint` | ESLint over `src` |
 
 ### Configuration
 
-`.env`:
-
-```env
-VITE_API_URL=http://localhost:5000
-```
-
-Because this is an absolute URL, requests go **directly** to the API and bypass the Vite proxy — so they are cross-origin and CORS applies. The backend must list this app's origin in `CORS_ALLOW_ORIGINS`; `http://localhost:3000` is included by default.
-
-Leave `VITE_API_URL` unset to use the `/api` proxy in `vite.config.js` instead, which makes requests same-origin.
+By default, the app requests the API at `/api`. Vite proxies this path to the
+local backend during development; the frontend's Nginx container proxies it to
+the API service in Docker Compose. Set `VITE_API_URL` to an absolute API URL
+only when the API is hosted on a different origin.
 
 ---
 

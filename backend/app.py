@@ -1,20 +1,12 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from routes.routes import router
 from connection import init_db
 from config import get_settings
 from logging_config import configure_logging
 from services.run_service import RunService
 import logging
-import os
 from contextlib import asynccontextmanager
-
-# Resolve relative to this file, not the process working directory, so the SPA
-# is found whether the server is started from the repo root or from backend/.
-BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
-client_build_dir = os.path.join(BACKEND_DIR, "static")
 
 # Settings are validated once at import; a bad value fails here rather than at
 # the moment it is first needed.
@@ -70,37 +62,6 @@ async def health():
 
 # Include API routes
 app.include_router(router)
-
-# Check if client build directory exists
-if os.path.exists(client_build_dir):
-    # Mount the React static files directory directly
-    app.mount("/static", StaticFiles(directory=os.path.join(client_build_dir, "static")), name="static")
-    
-    # Mount other static files at root level
-    for item in os.listdir(client_build_dir):
-        item_path = os.path.join(client_build_dir, item)
-        # Skip directories as we've already mounted the static dir
-        if os.path.isfile(item_path) and item != "index.html":
-            @app.get(f"/{item}")
-            async def serve_static_file(item=item):
-                return FileResponse(os.path.join(client_build_dir, item))
-
-    # Root route to serve the React app
-    @app.get("/")
-    async def serve_spa(request: Request):
-        return FileResponse(os.path.join(client_build_dir, "index.html"))
-
-    # Fallback route for client-side routing
-    @app.get("/{path:path}")
-    async def serve_spa_paths(path: str):
-        # Check if the path is an API route
-        if path.startswith("api/"):
-            raise HTTPException(status_code=404, detail="API route not found")
-        
-        # For all non-API routes, serve the React app
-        return FileResponse(os.path.join(client_build_dir, "index.html"))
-else:
-    print("WARNING: Client build directory not found. React app will not be served.")
 
 if __name__ == "__main__":
     import uvicorn
