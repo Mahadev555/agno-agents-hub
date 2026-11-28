@@ -7,11 +7,13 @@ neighbours.
 """
 
 import logging
+import secrets
 from typing import Any, Dict, Optional
 
-from fastapi import Depends, HTTPException, Query, status
+from fastapi import Depends, Header, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from config import get_settings
 from services.auth_service import AuthError, AuthService, decode_access_token
 
 logger = logging.getLogger(__name__)
@@ -111,6 +113,17 @@ async def get_current_admin(
             status_code=status.HTTP_403_FORBIDDEN, detail="Administrator access required"
         )
     return user
+
+
+async def require_bootstrap_token(
+    token: Optional[str] = Header(None, alias="X-Bootstrap-Token"),
+) -> None:
+    """Authorize the one-time initial-admin setup endpoint."""
+    expected = get_settings().bootstrap_admin_token
+    if not expected:
+        raise HTTPException(status_code=404, detail="Admin bootstrap is disabled")
+    if not token or not secrets.compare_digest(token, expected):
+        raise HTTPException(status_code=403, detail="Invalid bootstrap token")
 
 
 def require_owner(resource: Dict[str, Any], user: Dict[str, Any], label: str) -> None:

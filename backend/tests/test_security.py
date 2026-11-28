@@ -14,10 +14,16 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dependencies import can_read, get_current_admin, require_owner  # noqa: E402
+from dependencies import (  # noqa: E402
+    can_read,
+    get_current_admin,
+    require_bootstrap_token,
+    require_owner,
+)
 from fastapi import HTTPException  # noqa: E402
 from runtime.mcp_guard import MCPEndpointBlocked, validate_mcp_url  # noqa: E402
 from services import rate_limit  # noqa: E402
+from config import get_settings  # noqa: E402
 from services.auth_service import (  # noqa: E402
     AuthError,
     AuthService,
@@ -143,6 +149,87 @@ def test_admin_dependency_rejects_regular_user():
 
 def test_admin_dependency_accepts_admin_user():
     assert asyncio.run(get_current_admin(ADMIN)) == ADMIN
+
+
+def test_bootstrap_api_requires_configured_secret(monkeypatch):
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "one-time-test-secret")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(HTTPException) as exc:
+            asyncio.run(require_bootstrap_token("incorrect"))
+        assert exc.value.status_code == 403
+        assert asyncio.run(require_bootstrap_token("one-time-test-secret")) is None
+    finally:
+        get_settings.cache_clear()
+
+
+def test_admin_bootstrap_is_rejected_after_first_admin(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from models.user import User
+    from routes.routes import router
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}")
+    User.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "one-time-test-secret")
+    monkeypatch.setenv("JWT_SECRET", "test-only-secret-that-is-at-least-32-bytes")
+    get_settings.cache_clear()
+
+    @contextmanager
+    def isolated_session_scope():
+        session = session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    monkeypatch.setattr("services.auth_service.session_scope", isolated_session_scope)
+    try:
+        AuthService.register("admin@example.com", "initial-user-password")
+        app = FastAPI()
+        app.include_router(router)
+        with TestClient(app) as client:
+            headers = {"X-Bootstrap-Token": "one-time-test-secret"}
+            payload = {
+                "email": "admin@example.com",
+                "password": "initial-admin-password",
+            }
+            first = client.post(
+                "/api/auth/bootstrap-admin",
+                headers={"X-Bootstrap-Token": "invalid"},
+                json=payload,
+            )
+            assert first.status_code == 403
+
+            first = client.post(
+                "/api/auth/bootstrap-admin", headers=headers, json=payload
+            )
+            assert first.status_code == 201
+            assert first.json()["user"]["is_admin"] is True
+
+            second = client.post(
+                "/api/auth/bootstrap-admin", headers=headers, json=payload
+            )
+            assert second.status_code == 409
+
+        with session_factory() as session:
+            admin = session.query(User).filter(User.email == "admin@example.com").one()
+            assert admin.is_admin is True
+            assert verify_password("initial-admin-password", admin.password_hash)
+    finally:
+        get_settings.cache_clear()
+        engine.dispose()
 
 
 def test_unowned_resource_is_admin_only_for_writes():

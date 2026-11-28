@@ -40,7 +40,7 @@ backend/
 │   └── rate_limit.py       Per-user run quotas
 │
 ├── controllers/            Authorization + orchestration
-├── bootstrap_admin.py      Explicit one-time admin provisioning
+├── bootstrap_admin.py      Local admin provisioning fallback
 ├── routes/routes.py        Endpoints
 ├── agents/
 │   ├── hosts/host_agent.py Config -> Agno Agent/Team
@@ -62,15 +62,17 @@ pip install -r requirements.txt
 
 cp .env.example .env                  # then fill in DATABASE_URL + GOOGLE_API_KEY
 python -m alembic upgrade head        # create the schema
-# Configure BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD in .env first.
-python -m bootstrap_admin            # provision the admin account
 python run_server.py                  # http://localhost:5000
 ```
 
-The bootstrap command creates or promotes the configured account and makes it
-the only administrator. Public registration creates standard accounts only.
-Remove `BOOTSTRAP_ADMIN_PASSWORD` from `.env` or the deployment environment
-after bootstrapping; use a secret manager for deployed environments.
+To create the initial admin, set a strong `BOOTSTRAP_ADMIN_TOKEN` in the
+backend environment and send `POST /api/auth/bootstrap-admin` with the admin
+email, password, and display name in the JSON body. The endpoint only works
+when the bootstrap token is configured and no admin exists. The first request
+creates or promotes the account, stores only the Argon2 password hash in the
+database, and returns an admin access token. Later attempts return `409`, even
+if the token remains configured. Remove the bootstrap token and restart or
+redeploy after setup. Public registration creates standard accounts only.
 
 ### Optional: sample agents
 
@@ -164,7 +166,9 @@ Names are validated when an agent is **saved**. An unknown tool or provider is a
 
 ## API
 
-Interactive docs at `/docs`. All endpoints require `Authorization: Bearer <token>` except `/health` and `/api/auth/{register,login}`.
+Interactive docs at `/docs`. Endpoints require `Authorization: Bearer <token>`
+except `/health`, `/api/auth/{register,login}`, and the bootstrap endpoint, which
+requires `X-Bootstrap-Token`.
 
 ### Auth
 | Method | Path | Notes |
@@ -172,6 +176,7 @@ Interactive docs at `/docs`. All endpoints require `Authorization: Bearer <token
 | POST | `/api/auth/register` | Creates a standard account |
 | POST | `/api/auth/login` | Returns token + user |
 | GET | `/api/auth/me` | Current account |
+| POST | `/api/auth/bootstrap-admin` | One-time initial admin setup; requires `X-Bootstrap-Token` |
 
 ### Admin
 Every endpoint below requires the current account to have `is_admin=true`.

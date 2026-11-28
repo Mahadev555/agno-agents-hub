@@ -13,6 +13,7 @@ from pydantic import BaseModel, EmailStr, Field
 from config import get_settings
 from services.auth_service import (
     MIN_PASSWORD_LENGTH,
+    AdminBootstrapError,
     AuthError,
     AuthService,
     create_access_token,
@@ -34,6 +35,14 @@ class LoginRequest(BaseModel):
 
     email: EmailStr
     password: str = Field(..., min_length=1, max_length=1024)
+
+
+class BootstrapAdminRequest(BaseModel):
+    """Credentials for one-time creation of the initial administrator."""
+
+    email: EmailStr
+    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=1024)
+    display_name: Optional[str] = Field(default=None, max_length=120)
 
 
 class TokenResponse(BaseModel):
@@ -94,6 +103,25 @@ class AuthController:
         token = create_access_token(
             user["user_id"], user["email"], is_admin=user.get("is_admin", False)
         )
+        return TokenResponse(**token, user=user)
+
+    @staticmethod
+    async def bootstrap_admin(payload: BootstrapAdminRequest) -> TokenResponse:
+        """Create the first administrator and sign them in."""
+        try:
+            user = AuthService.create_initial_admin(
+                email=payload.email,
+                password=payload.password,
+                display_name=payload.display_name or "Administrator",
+            )
+        except AdminBootstrapError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+            ) from exc
+        except AuthError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+        token = create_access_token(user["user_id"], user["email"], is_admin=True)
         return TokenResponse(**token, user=user)
 
     @staticmethod

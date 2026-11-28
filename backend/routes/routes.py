@@ -11,6 +11,7 @@ from controllers.agent_execution_controller import AgentExecutionController
 from controllers.admin_controller import AdminController
 from controllers.auth_controller import (
     AuthController,
+    BootstrapAdminRequest,
     LoginRequest,
     RegisterRequest,
     TokenResponse,
@@ -28,7 +29,12 @@ from controllers.team_controller import (
     TeamsController,
     TeamUpdateRequest,
 )
-from dependencies import get_current_admin, get_current_user, get_current_user_sse
+from dependencies import (
+    get_current_admin,
+    get_current_user,
+    get_current_user_sse,
+    require_bootstrap_token,
+)
 from services.run_bus import run_bus
 
 logger = logging.getLogger(__name__)
@@ -534,13 +540,24 @@ async def run_team(team_id: int, request: TeamRunRequest, user=Depends(get_curre
 
 # ======================= AUTH ROUTES =======================
 #
-# The only endpoints reachable without a token. Everything else requires
-# Authorization: Bearer <access_token>.
+# Public auth endpoints require no user bearer token. Admin bootstrap requires
+# its separate X-Bootstrap-Token; all other protected routes use a bearer token.
 
 @router.post("/api/auth/register", response_model=TokenResponse, status_code=201)
 async def register(payload: RegisterRequest):
-    """Create an account and return an access token. First account is admin."""
+    """Create a standard account and return an access token."""
     return await AuthController.register(payload)
+
+
+@router.post(
+    "/api/auth/bootstrap-admin",
+    response_model=TokenResponse,
+    status_code=201,
+    dependencies=[Depends(require_bootstrap_token)],
+)
+async def bootstrap_admin(payload: BootstrapAdminRequest):
+    """Create the first administrator using the bootstrap token."""
+    return await AuthController.bootstrap_admin(payload)
 
 
 @router.post("/api/auth/login", response_model=TokenResponse)

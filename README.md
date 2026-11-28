@@ -121,13 +121,27 @@ npm run dev                  # http://localhost:3000
 
 ### 6. Provision the administrator
 
-Set `BOOTSTRAP_ADMIN_EMAIL=admin@gmail.com` and a strong `BOOTSTRAP_ADMIN_PASSWORD` in the backend environment, then run this once from the `backend` directory:
+Set a one-time `BOOTSTRAP_ADMIN_TOKEN` in the backend environment, then call:
 
-```bash
-python -m bootstrap_admin
+```http
+POST /api/auth/bootstrap-admin
+X-Bootstrap-Token: <one-time-token>
+Content-Type: application/json
+
+{
+  "email": "admin@gmail.com",
+  "password": "<your-strong-password>",
+  "display_name": "Administrator"
+}
 ```
 
-The command creates or promotes that account, removes other admin roles, and resets its password to the supplied secret. Remove `BOOTSTRAP_ADMIN_PASSWORD` after it completes, then sign in through the app. Public registration creates standard users only; set `ALLOW_REGISTRATION=false` when you want to close sign-ups.
+This endpoint works only while no administrator exists. The first request
+creates or promotes the account and stores only the Argon2 password hash in the
+database; it returns an admin access token. Later requests return `409`, even
+if the bootstrap token is still configured. Remove the token from the
+environment and restart/redeploy after setup. Send the request over HTTPS in
+deployed environments. Public registration creates standard users only; set
+`ALLOW_REGISTRATION=false` when you want to close sign-ups.
 
 ---
 
@@ -135,7 +149,7 @@ The command creates or promotes that account, removes other admin roles, and res
 
 | Rule | Behavior |
 |---|---|
-| Anonymous request | `401` on everything except `/health`, `/api/auth/register`, `/api/auth/login` |
+| Anonymous request | `401` on protected routes; admin bootstrap requires `X-Bootstrap-Token` |
 | Own resource | Full read and write |
 | Public resource (`is_public: true`) | Readable by anyone signed in, **writable only by its owner** |
 | Someone else's private resource | `404`, not `403` — ids cannot be probed |
@@ -154,6 +168,7 @@ Interactive docs: **http://localhost:5000/docs**
 POST   /api/auth/register       Create a standard account
 POST   /api/auth/login          Exchange credentials for a token
 GET    /api/auth/me             The signed-in account
+POST   /api/auth/bootstrap-admin One-time setup; requires X-Bootstrap-Token
 ```
 
 ### Admin (requires an administrator account)

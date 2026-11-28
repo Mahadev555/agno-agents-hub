@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional
 import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
+from sqlalchemy import text
 
 from config import get_settings
 from connection import session_scope
@@ -30,6 +31,10 @@ MIN_PASSWORD_LENGTH = 10
 
 class AuthError(Exception):
     """Raised for any credential or token problem."""
+
+
+class AdminBootstrapError(AuthError):
+    """Raised when an initial administrator has already been created."""
 
 
 def hash_password(password: str) -> str:
@@ -103,7 +108,7 @@ class AuthService:
         Create an account.
 
         Public self-registration never grants administrative access. Provision
-        the administrator explicitly with `python -m bootstrap_admin`.
+        an administrator through the protected bootstrap endpoint or CLI.
         """
         email = (email or "").strip().lower()
         if not email:
@@ -136,7 +141,7 @@ class AuthService:
         """
         Create or promote the designated admin and remove other admin roles.
 
-        This must only be called by the explicit deployment bootstrap command;
+        This must only be called by an operator-authorized bootstrap flow;
         public registration cannot invoke it.
         """
         email = (email or "").strip().lower()
@@ -145,6 +150,9 @@ class AuthService:
 
         password_hash = hash_password(password)
         with session_scope() as session:
+            if session.bind.dialect.name == "postgresql":
+                session.execute(text("SELECT pg_advisory_xact_lock(781204631)"))
+
             session.query(User).filter(
                 User.is_admin.is_(True), User.email != email
             ).update({User.is_admin: False}, synchronize_session=False)
@@ -169,6 +177,49 @@ class AuthService:
             record = user.to_dict()
 
         logger.info(f"Bootstrapped administrator account (id={record['user_id']})")
+        return record
+
+    @staticmethod
+    def create_initial_admin(
+        email: str, password: str, display_name: str = "Administrator"
+    ) -> Dict[str, Any]:
+        """Create the first administrator; reject every later bootstrap attempt."""
+        email = (email or "").strip().lower()
+        if not email:
+            raise AuthError("Admin email is required")
+
+        password_hash = hash_password(password)
+        with session_scope() as session:
+            if session.bind.dialect.name == "postgresql":
+                session.execute(text("SELECT pg_advisory_xact_lock(781204631)"))
+
+            if session.query(User).filter(User.is_admin.is_(True)).first():
+                raise AdminBootstrapError(
+                    "Admin bootstrap has already been completed"
+                )
+
+            user = session.query(User).filter(User.email == email).first()
+            if user is None:
+                user = User(
+                    email=email,
+                    password_hash=password_hash,
+                    display_name=display_name or email.split("@")[0],
+                    is_active=True,
+                    is_admin=True,
+                )
+                session.add(user)
+            else:
+                user.password_hash = password_hash
+                user.display_name = (
+                    display_name or user.display_name or email.split("@")[0]
+                )
+                user.is_active = True
+                user.is_admin = True
+
+            session.flush()
+            record = user.to_dict()
+
+        logger.info("Created initial administrator account (id=%s)", record["user_id"])
         return record
 
     @staticmethod
