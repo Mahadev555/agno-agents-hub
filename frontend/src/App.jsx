@@ -4,6 +4,8 @@ import Sidebar from './components/Sidebar'
 import Dashboard from './components/Dashboard'
 import ChatPlayground from './components/ChatPlayground'
 import AgentComponent from './components/AgentComponent'
+import TeamsPage from './components/TeamsPage'
+import RunsPage from './components/RunsPage'
 import Settings from './components/Settings'
 import Login from './components/Login'
 import PageContainer from './components/PageContainer'
@@ -83,12 +85,16 @@ const App = () => {
     { id: 'dashboard', label: 'Overview', icon: 'overview' },
     { id: 'chat', label: 'Run agent', icon: 'run' },
     { id: 'agents', label: 'Agents', icon: 'agents' },
+    { id: 'teams', label: 'Teams', icon: 'teams' },
+    { id: 'runs', label: 'Run history', icon: 'runs' },
   ]
 
   const pageTitle = useMemo(() => ({
     dashboard: 'Overview',
     chat: 'Run agent',
     agents: 'Agents',
+    teams: 'Teams',
+    runs: 'Run history',
     settings: 'Profile',
   }[activeTab] || 'Overview'), [activeTab])
 
@@ -161,6 +167,10 @@ const App = () => {
             refreshKey={agentRefreshKey}
           />
         )
+      case 'teams':
+        return <TeamsPage onToast={notify} />
+      case 'runs':
+        return <RunsPage />
       case 'settings':
         return <Settings user={user} />
       default:

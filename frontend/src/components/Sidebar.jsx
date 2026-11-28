@@ -5,6 +5,8 @@ import {
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  History,
+  Users,
   Settings as SettingsIcon,
   UserCircle,
 } from 'lucide-react'
@@ -14,6 +16,8 @@ const icons = {
   overview: LayoutDashboard,
   run: MessageSquare,
   agents: Bot,
+  teams: Users,
+  runs: History,
 }
 
 const Sidebar = ({
