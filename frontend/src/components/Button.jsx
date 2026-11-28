@@ -7,6 +7,7 @@ const Button = ({
   className = '',
   disabled = false,
   loading = false,
+  loadingText = 'Creating…',
   fullWidth = false,
   onClick,
   type = 'button',
@@ -26,7 +27,7 @@ const Button = ({
     aria-busy={loading || undefined}
     {...props}
   >
-    {loading ? 'Creating…' : children}
+    {loading ? loadingText : children}
   </button>
 )
 

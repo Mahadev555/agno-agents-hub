@@ -10,7 +10,7 @@ export {
   isCoordinatorAgent,
 } from './agentTypes'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || ''
+const API_BASE_URL = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '')
 
 // CRUD calls are fast. Agent execution is not: a coordinated team run routinely
 // takes 20-60s because it is several sequential LLM calls. A single 30s timeout
@@ -209,6 +209,16 @@ export const agentService = {
     const response = await api.post('/api/agents', agentData)
     return response.data
   },
+
+  updateAgent: async (agentId, agentData) => {
+    const response = await api.put(`/api/agents/${agentId}`, agentData)
+    return response.data
+  },
+
+  deleteAgent: async (agentId) => {
+    const response = await api.delete(`/api/agents/${agentId}`)
+    return response.data
+  },
 }
 
 /**
@@ -220,10 +230,11 @@ export const agentService = {
  */
 export const runService = {
   // Returns the pending run record immediately; work continues server-side.
-  start: async (prompt, { agentIds = [], hostAgentId = null } = {}) => {
+  start: async (prompt, { agentIds = [], hostAgentId = null, teamId = null } = {}) => {
     const payload = { prompt }
     if (agentIds.length > 0) payload.agentIds = agentIds.map(Number)
     if (hostAgentId) payload.hostAgentId = Number(hostAgentId)
+    if (teamId) payload.teamId = Number(teamId)
 
     const response = await api.post('/api/runs', payload)
     return response.data
@@ -234,8 +245,10 @@ export const runService = {
     return response.data
   },
 
-  list: async (limit = 50) => {
-    const response = await api.get('/api/runs', { params: { limit } })
+  list: async (limit = 50, status = null) => {
+    const params = { limit }
+    if (status) params.status = status
+    const response = await api.get('/api/runs', { params })
     return response.data || []
   },
 
@@ -286,6 +299,38 @@ export const runService = {
     }
 
     return () => finish(() => {})
+  },
+}
+
+export const teamService = {
+  list: async () => {
+    const response = await api.get('/api/teams')
+    return response.data || []
+  },
+
+  get: async (teamId) => {
+    const response = await api.get(`/api/teams/${teamId}`)
+    return response.data
+  },
+
+  create: async (teamData) => {
+    const response = await api.post('/api/teams', teamData)
+    return response.data
+  },
+
+  update: async (teamId, teamData) => {
+    const response = await api.put(`/api/teams/${teamId}`, teamData)
+    return response.data
+  },
+
+  delete: async (teamId) => {
+    const response = await api.delete(`/api/teams/${teamId}`)
+    return response.data
+  },
+
+  run: async (teamId, prompt) => {
+    const response = await api.post(`/api/teams/${teamId}/runs`, { prompt })
+    return response.data
   },
 }
 
