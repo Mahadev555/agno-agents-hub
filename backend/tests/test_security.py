@@ -5,6 +5,7 @@ These cost no API quota. They cover the things that, if they regress, expose
 other people's data or let a stranger spend the deployment's LLM budget.
 """
 
+import asyncio
 import os
 import sys
 import uuid
@@ -13,7 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dependencies import can_read, require_owner  # noqa: E402
+from dependencies import can_read, get_current_admin, require_owner  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 from runtime.mcp_guard import MCPEndpointBlocked, validate_mcp_url  # noqa: E402
 from services import rate_limit  # noqa: E402
@@ -70,7 +71,13 @@ def test_token_round_trip():
     claims = decode_access_token(token)
     assert claims["sub"] == "42"
     assert claims["email"] == "user@example.com"
+    assert claims["role"] == "user"
     assert claims["exp"] > claims["iat"]
+
+
+def test_admin_role_is_included_in_token_claims():
+    token = create_access_token(42, "admin@example.com", is_admin=True)["access_token"]
+    assert decode_access_token(token)["role"] == "admin"
 
 
 def test_tampered_token_rejected():
@@ -126,6 +133,16 @@ def test_admin_can_read_and_write_anything():
     resource = {"owner_id": 1, "is_public": False}
     assert can_read(resource, ADMIN)
     require_owner(resource, ADMIN, "agent")
+
+
+def test_admin_dependency_rejects_regular_user():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(get_current_admin(STRANGER))
+    assert exc.value.status_code == 403
+
+
+def test_admin_dependency_accepts_admin_user():
+    assert asyncio.run(get_current_admin(ADMIN)) == ADMIN
 
 
 def test_unowned_resource_is_admin_only_for_writes():
@@ -254,6 +271,15 @@ def test_user_dict_never_exposes_the_hash():
     record = AuthService.register(email, "a-long-enough-passphrase")
     try:
         assert "password_hash" not in record
+    finally:
+        _delete_user(email)
+
+
+def test_public_registration_never_grants_admin():
+    email = f"__test_{uuid.uuid4().hex[:10]}@example.com"
+    record = AuthService.register(email, "a-long-enough-passphrase")
+    try:
+        assert record["is_admin"] is False
     finally:
         _delete_user(email)
 

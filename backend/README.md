@@ -32,6 +32,7 @@ backend/
 │
 ├── services/
 │   ├── auth_service.py     Argon2 hashing, JWT issue/verify
+│   ├── admin_service.py   Admin aggregates and paginated views
 │   ├── agent_service.py    Agent + Team writes (validated)
 │   ├── database_service.py Reads
 │   ├── run_service.py      Run persistence
@@ -39,6 +40,7 @@ backend/
 │   └── rate_limit.py       Per-user run quotas
 │
 ├── controllers/            Authorization + orchestration
+├── bootstrap_admin.py      Explicit one-time admin provisioning
 ├── routes/routes.py        Endpoints
 ├── agents/
 │   ├── hosts/host_agent.py Config -> Agno Agent/Team
@@ -60,10 +62,15 @@ pip install -r requirements.txt
 
 cp .env.example .env                  # then fill in DATABASE_URL + GOOGLE_API_KEY
 python -m alembic upgrade head        # create the schema
+# Configure BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD in .env first.
+python -m bootstrap_admin            # provision the admin account
 python run_server.py                  # http://localhost:5000
 ```
 
-Register the first account through the API or the UI — **it becomes an administrator**.
+The bootstrap command creates or promotes the configured account and makes it
+the only administrator. Public registration creates standard accounts only.
+Remove `BOOTSTRAP_ADMIN_PASSWORD` from `.env` or the deployment environment
+after bootstrapping; use a secret manager for deployed environments.
 
 ### Optional: sample agents
 
@@ -162,9 +169,23 @@ Interactive docs at `/docs`. All endpoints require `Authorization: Bearer <token
 ### Auth
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/auth/register` | First account becomes admin |
+| POST | `/api/auth/register` | Creates a standard account |
 | POST | `/api/auth/login` | Returns token + user |
 | GET | `/api/auth/me` | Current account |
+
+### Admin
+Every endpoint below requires the current account to have `is_admin=true`.
+The role is re-read from the database for each request; JWT role claims are
+never trusted for authorization.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/admin/overview` | Aggregate user, agent, team, run, and token counts |
+| GET | `/api/admin/users` | Paginated users, optional `search`; no password hashes |
+| GET | `/api/admin/agents` | Paginated metadata and owners; excludes raw configs |
+| GET | `/api/admin/teams` | Paginated composition and owners; excludes raw configs |
+| GET | `/api/admin/runs` | Global paginated history; optional `status` and `user_id` |
+| GET | `/api/admin/runs/{id}` | Full prompt, output, error, and token usage |
 
 ### Agents
 | Method | Path |
@@ -232,7 +253,7 @@ A terminal event (`completed` or `error`) is **always** last, so a consumer neve
 
 **Passwords** — Argon2id. Not bcrypt, which silently truncates at 72 bytes and would make two long passphrases interchangeable.
 
-**Tokens** — JWT with a pinned algorithm, so a token cannot request `alg: none`. The user is re-read from the database each request, so a disabled account stops working immediately.
+**Tokens** — JWT with a pinned algorithm, so a token cannot request `alg: none`. The user and admin role are re-read from the database each request, so disabling or demoting an account takes effect immediately. The role claim is informational only.
 
 **MCP egress** — an agent's `mcp_config.url` is user-supplied and the server connects to it, which is SSRF by design. `runtime/mcp_guard.py` resolves the host and refuses loopback, private, link-local, reserved, and multicast addresses — including `169.254.169.254`, where cloud instance metadata lives. Every resolved address is checked, since a hostname can resolve to both a public and a private address.
 

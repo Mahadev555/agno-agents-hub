@@ -50,7 +50,9 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user_id: int, email: str) -> Dict[str, Any]:
+def create_access_token(
+    user_id: int, email: str, is_admin: bool = False
+) -> Dict[str, Any]:
     """Issue a signed access token."""
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -59,6 +61,7 @@ def create_access_token(user_id: int, email: str) -> Dict[str, Any]:
     payload = {
         "sub": str(user_id),
         "email": email,
+        "role": "admin" if is_admin else "user",
         "iat": int(now.timestamp()),
         "exp": int(expires.timestamp()),
     }
@@ -99,8 +102,8 @@ class AuthService:
         """
         Create an account.
 
-        The first account created becomes an admin so a fresh deployment has
-        someone who can manage it.
+        Public self-registration never grants administrative access. Provision
+        the administrator explicitly with `python -m bootstrap_admin`.
         """
         email = (email or "").strip().lower()
         if not email:
@@ -112,20 +115,60 @@ class AuthService:
             if session.query(User).filter(User.email == email).first():
                 raise AuthError("An account with that email already exists")
 
-            is_first = session.query(User).count() == 0
-
             user = User(
                 email=email,
                 password_hash=password_hash,
                 display_name=display_name or email.split("@")[0],
                 is_active=True,
-                is_admin=is_first,
+                is_admin=False,
             )
             session.add(user)
             session.flush()
             record = user.to_dict()
 
-        logger.info(f"Registered user {email} (id={record['user_id']}, admin={record['is_admin']})")
+        logger.info(f"Registered user {email} (id={record['user_id']})")
+        return record
+
+    @staticmethod
+    def bootstrap_admin(
+        email: str, password: str, display_name: str = "Administrator"
+    ) -> Dict[str, Any]:
+        """
+        Create or promote the designated admin and remove other admin roles.
+
+        This must only be called by the explicit deployment bootstrap command;
+        public registration cannot invoke it.
+        """
+        email = (email or "").strip().lower()
+        if not email:
+            raise AuthError("Admin email is required")
+
+        password_hash = hash_password(password)
+        with session_scope() as session:
+            session.query(User).filter(
+                User.is_admin.is_(True), User.email != email
+            ).update({User.is_admin: False}, synchronize_session=False)
+
+            user = session.query(User).filter(User.email == email).first()
+            if user is None:
+                user = User(
+                    email=email,
+                    password_hash=password_hash,
+                    display_name=display_name or "Administrator",
+                    is_active=True,
+                    is_admin=True,
+                )
+                session.add(user)
+            else:
+                user.password_hash = password_hash
+                user.display_name = display_name or user.display_name or "Administrator"
+                user.is_active = True
+                user.is_admin = True
+
+            session.flush()
+            record = user.to_dict()
+
+        logger.info(f"Bootstrapped administrator account (id={record['user_id']})")
         return record
 
     @staticmethod
