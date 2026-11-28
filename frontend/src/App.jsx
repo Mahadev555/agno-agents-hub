@@ -6,6 +6,7 @@ import ChatPlayground from './components/ChatPlayground'
 import AgentComponent from './components/AgentComponent'
 import TeamsPage from './components/TeamsPage'
 import RunsPage from './components/RunsPage'
+import AdminDashboard from './components/AdminDashboard'
 import Settings from './components/Settings'
 import Login from './components/Login'
 import PageContainer from './components/PageContainer'
@@ -87,6 +88,7 @@ const App = () => {
     { id: 'agents', label: 'Agents', icon: 'agents' },
     { id: 'teams', label: 'Teams', icon: 'teams' },
     { id: 'runs', label: 'Run history', icon: 'runs' },
+    ...(user?.is_admin ? [{ id: 'admin', label: 'Admin dashboard', icon: 'admin' }] : []),
   ]
 
   const pageTitle = useMemo(() => ({
@@ -95,6 +97,7 @@ const App = () => {
     agents: 'Agents',
     teams: 'Teams',
     runs: 'Run history',
+    admin: 'Admin dashboard',
     settings: 'Profile',
   }[activeTab] || 'Overview'), [activeTab])
 
@@ -171,6 +174,8 @@ const App = () => {
         return <TeamsPage onToast={notify} />
       case 'runs':
         return <RunsPage />
+      case 'admin':
+        return user?.is_admin ? <AdminDashboard /> : <Dashboard />
       case 'settings':
         return <Settings user={user} />
       default:

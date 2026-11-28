@@ -119,9 +119,15 @@ npm install
 npm run dev                  # http://localhost:3000
 ```
 
-### 6. Create the first account
+### 6. Provision the administrator
 
-Every endpoint except `/health` and `/api/auth/*` requires a bearer token. Open the app and register — **the first account created becomes an administrator.**
+Set `BOOTSTRAP_ADMIN_EMAIL=admin@gmail.com` and a strong `BOOTSTRAP_ADMIN_PASSWORD` in the backend environment, then run this once from the `backend` directory:
+
+```bash
+python -m bootstrap_admin
+```
+
+The command creates or promotes that account, removes other admin roles, and resets its password to the supplied secret. Remove `BOOTSTRAP_ADMIN_PASSWORD` after it completes, then sign in through the app. Public registration creates standard users only; set `ALLOW_REGISTRATION=false` when you want to close sign-ups.
 
 ---
 
@@ -145,10 +151,24 @@ Interactive docs: **http://localhost:5000/docs**
 
 ### Auth
 ```
-POST   /api/auth/register       Create an account (first one is admin)
+POST   /api/auth/register       Create a standard account
 POST   /api/auth/login          Exchange credentials for a token
 GET    /api/auth/me             The signed-in account
 ```
+
+### Admin (requires an administrator account)
+```
+GET    /api/admin/overview      Aggregate account, resource, run, and token counts
+GET    /api/admin/users         Paginated user list; optional ?search=
+GET    /api/admin/agents        Agent metadata and owners; optional ?search=
+GET    /api/admin/teams         Team composition and owners; optional ?search=
+GET    /api/admin/runs          Global run history; optional ?status= and ?user_id=
+GET    /api/admin/runs/{id}     Full prompt, output, error, and usage
+```
+
+Admin authorization is checked against the current database role on every
+request. The JWT role claim is informational; changing a claim cannot grant
+admin access. Admin resource lists omit raw agent and team configuration.
 
 ### Agents
 ```

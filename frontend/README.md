@@ -29,6 +29,7 @@ frontend/
 │   │   ├── AgentComponent.jsx  Agent catalog and details
 │   │   ├── AgentTable.jsx   Responsive agent list and loading skeleton
 │   │   ├── ChatPlayground.jsx  Run agents/teams with streamed output
+│   │   ├── AdminDashboard.jsx  Admin-only users, resources, and run history
 │   │   ├── Settings.jsx     Account profile
 │   │   ├── Button.jsx
 │   │   └── index.js
@@ -93,7 +94,9 @@ App mounts
 - **response interceptor** — on `401`, clears the token and notifies the app so it drops to the login screen instead of rendering empty lists
 - **`setUnauthenticatedHandler`** — how `App.jsx` subscribes to that
 
-The first account registered on a fresh deployment becomes an **administrator**.
+The **Admin dashboard** navigation item appears only when `/api/auth/me`
+returns `is_admin: true`. Its data comes from separate `/api/admin/*` endpoints,
+which perform a database-backed admin check on every request.
 
 > The token is in `localStorage`, which any script on the page can read — it is only as safe as the app's XSS posture. `httpOnly` cookies would be stronger but need CSRF handling and a same-site deployment.
 
