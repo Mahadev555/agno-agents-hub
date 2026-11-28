@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dependencies import (  # noqa: E402
     can_read,
     get_current_admin,
-    require_bootstrap_token,
     require_owner,
 )
 from fastapi import HTTPException  # noqa: E402
@@ -151,19 +150,28 @@ def test_admin_dependency_accepts_admin_user():
     assert asyncio.run(get_current_admin(ADMIN)) == ADMIN
 
 
-def test_bootstrap_api_requires_configured_secret(monkeypatch):
-    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "one-time-test-secret")
-    get_settings.cache_clear()
-    try:
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(require_bootstrap_token("incorrect"))
-        assert exc.value.status_code == 403
-        assert asyncio.run(require_bootstrap_token("one-time-test-secret")) is None
-    finally:
-        get_settings.cache_clear()
+def test_admin_bootstrap_requires_environment_credentials(monkeypatch):
+    from types import SimpleNamespace
+
+    from controllers.auth_controller import AuthController
+
+    monkeypatch.setattr(
+        "controllers.auth_controller.get_settings",
+        lambda: SimpleNamespace(
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "controllers.auth_controller.AuthService.is_admin_account",
+        lambda email: False,
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(AuthController.bootstrap_admin())
+    assert exc.value.status_code == 503
 
 
-def test_admin_bootstrap_is_rejected_after_first_admin(tmp_path, monkeypatch):
+def test_admin_bootstrap_api_uses_env_credentials_once(tmp_path, monkeypatch):
     from contextlib import contextmanager
 
     from fastapi import FastAPI
@@ -177,8 +185,11 @@ def test_admin_bootstrap_is_rejected_after_first_admin(tmp_path, monkeypatch):
     engine = create_engine(f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}")
     User.__table__.create(engine)
     session_factory = sessionmaker(bind=engine)
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}")
-    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "one-time-test-secret")
+    monkeypatch.setenv(
+        "DATABASE_URL", f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}"
+    )
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "initial-admin-password")
     monkeypatch.setenv("JWT_SECRET", "test-only-secret-that-is-at-least-32-bytes")
     get_settings.cache_clear()
 
@@ -196,37 +207,56 @@ def test_admin_bootstrap_is_rejected_after_first_admin(tmp_path, monkeypatch):
 
     monkeypatch.setattr("services.auth_service.session_scope", isolated_session_scope)
     try:
-        AuthService.register("admin@example.com", "initial-user-password")
+        AuthService.bootstrap_admin(
+            "previous-admin@example.com", "previous-admin-password"
+        )
         app = FastAPI()
         app.include_router(router)
         with TestClient(app) as client:
-            headers = {"X-Bootstrap-Token": "one-time-test-secret"}
-            payload = {
-                "email": "admin@example.com",
-                "password": "initial-admin-password",
+            first = client.post("/api/auth/bootstrap-admin")
+            assert first.status_code == 200
+            first_body = first.json()
+            assert first_body == {
+                "created": True,
+                "message": "Admin account created",
             }
-            first = client.post(
-                "/api/auth/bootstrap-admin",
-                headers={"X-Bootstrap-Token": "invalid"},
-                json=payload,
-            )
-            assert first.status_code == 403
+            assert "access_token" not in first_body
+            assert "password" not in first_body
+            assert "email" not in first_body
 
-            first = client.post(
-                "/api/auth/bootstrap-admin", headers=headers, json=payload
-            )
-            assert first.status_code == 201
-            assert first.json()["user"]["is_admin"] is True
+            second = client.post("/api/auth/bootstrap-admin")
+            assert second.status_code == 200
+            assert second.json() == {
+                "created": False,
+                "message": "Admin account is already present",
+            }
 
-            second = client.post(
-                "/api/auth/bootstrap-admin", headers=headers, json=payload
+            from types import SimpleNamespace
+
+            monkeypatch.setattr(
+                "controllers.auth_controller.get_settings",
+                lambda: SimpleNamespace(
+                    bootstrap_admin_email="admin@example.com",
+                    bootstrap_admin_password=None,
+                ),
             )
-            assert second.status_code == 409
+            after_secrets_removed = client.post("/api/auth/bootstrap-admin")
+            assert after_secrets_removed.status_code == 200
+            assert after_secrets_removed.json() == {
+                "created": False,
+                "message": "Admin account is already present",
+            }
 
         with session_factory() as session:
             admin = session.query(User).filter(User.email == "admin@example.com").one()
             assert admin.is_admin is True
             assert verify_password("initial-admin-password", admin.password_hash)
+            previous_admin = (
+                session.query(User)
+                .filter(User.email == "previous-admin@example.com")
+                .one()
+            )
+            assert previous_admin.is_admin is False
     finally:
         get_settings.cache_clear()
         engine.dispose()

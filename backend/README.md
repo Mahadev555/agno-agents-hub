@@ -65,14 +65,18 @@ python -m alembic upgrade head        # create the schema
 python run_server.py                  # http://localhost:5000
 ```
 
-To create the initial admin, set a strong `BOOTSTRAP_ADMIN_TOKEN` in the
-backend environment and send `POST /api/auth/bootstrap-admin` with the admin
-email, password, and display name in the JSON body. The endpoint only works
-when the bootstrap token is configured and no admin exists. The first request
-creates or promotes the account, stores only the Argon2 password hash in the
-database, and returns an admin access token. Later attempts return `409`, even
-if the token remains configured. Remove the bootstrap token and restart or
-redeploy after setup. Public registration creates standard accounts only.
+Set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` in the backend
+environment (or `.env` locally), then call `POST /api/auth/bootstrap-admin`
+with no request body. It creates the configured account once, stores only an
+Argon2 password hash, and returns a generic status message—not the email,
+password, or an access token. Calls after an admin exists return
+`{"created": false, "message": "Admin account is already present"}`. This
+endpoint is intentionally unauthenticated so the initial setup can be
+triggered; anyone who can reach it can trigger account creation, but cannot
+choose credentials or receive an admin token. If another admin exists, the
+configured account becomes the sole admin. Keep the environment file private,
+use a strong password, and remove the bootstrap password after provisioning.
+Public registration creates standard accounts only.
 
 ### Optional: sample agents
 
@@ -167,8 +171,8 @@ Names are validated when an agent is **saved**. An unknown tool or provider is a
 ## API
 
 Interactive docs at `/docs`. Endpoints require `Authorization: Bearer <token>`
-except `/health`, `/api/auth/{register,login}`, and the bootstrap endpoint, which
-requires `X-Bootstrap-Token`.
+except `/health`, `/api/auth/{register,login}`, and the one-time
+`/api/auth/bootstrap-admin` initializer.
 
 ### Auth
 | Method | Path | Notes |
@@ -176,7 +180,7 @@ requires `X-Bootstrap-Token`.
 | POST | `/api/auth/register` | Creates a standard account |
 | POST | `/api/auth/login` | Returns token + user |
 | GET | `/api/auth/me` | Current account |
-| POST | `/api/auth/bootstrap-admin` | One-time initial admin setup; requires `X-Bootstrap-Token` |
+| POST | `/api/auth/bootstrap-admin` | One-time setup using server-side bootstrap credentials; no body |
 
 ### Admin
 Every endpoint below requires the current account to have `is_admin=true`.

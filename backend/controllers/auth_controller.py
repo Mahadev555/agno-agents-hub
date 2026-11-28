@@ -8,7 +8,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, TypeAdapter, ValidationError
 
 from config import get_settings
 from services.auth_service import (
@@ -37,14 +37,6 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1, max_length=1024)
 
 
-class BootstrapAdminRequest(BaseModel):
-    """Credentials for one-time creation of the initial administrator."""
-
-    email: EmailStr
-    password: str = Field(..., min_length=MIN_PASSWORD_LENGTH, max_length=1024)
-    display_name: Optional[str] = Field(default=None, max_length=120)
-
-
 class TokenResponse(BaseModel):
     """An issued access token and the account it belongs to."""
 
@@ -52,6 +44,13 @@ class TokenResponse(BaseModel):
     token_type: str
     expires_in: int
     user: Dict[str, Any]
+
+
+class BootstrapAdminResponse(BaseModel):
+    """Non-sensitive result of the one-time admin bootstrap."""
+
+    created: bool
+    message: str
 
 
 class AuthController:
@@ -106,23 +105,46 @@ class AuthController:
         return TokenResponse(**token, user=user)
 
     @staticmethod
-    async def bootstrap_admin(payload: BootstrapAdminRequest) -> TokenResponse:
-        """Create the first administrator and sign them in."""
-        try:
-            user = AuthService.create_initial_admin(
-                email=payload.email,
-                password=payload.password,
-                display_name=payload.display_name or "Administrator",
-            )
-        except AdminBootstrapError as exc:
+    async def bootstrap_admin() -> BootstrapAdminResponse:
+        """Create the first administrator using credentials from environment."""
+        settings = get_settings()
+        email = settings.bootstrap_admin_email
+        password = settings.bootstrap_admin_password
+        if not email:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Admin bootstrap email is not configured",
+            )
+
+        try:
+            email = str(TypeAdapter(EmailStr).validate_python(email))
+            if AuthService.is_admin_account(email):
+                return BootstrapAdminResponse(
+                    created=False, message="Admin account is already present"
+                )
+            if not password:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Admin bootstrap password is not configured",
+                )
+            AuthService.create_initial_admin(
+                email=email,
+                password=password,
+                display_name="Administrator",
+            )
+        except AdminBootstrapError:
+            return BootstrapAdminResponse(
+                created=False, message="Admin account is already present"
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Configured admin email is invalid",
             ) from exc
         except AuthError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-        token = create_access_token(user["user_id"], user["email"], is_admin=True)
-        return TokenResponse(**token, user=user)
+        return BootstrapAdminResponse(created=True, message="Admin account created")
 
     @staticmethod
     async def me(user: Dict[str, Any]) -> Dict[str, Any]:

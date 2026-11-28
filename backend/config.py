@@ -35,8 +35,11 @@ class Settings(BaseSettings):
     access_token_ttl_minutes: int = Field(
         default=60 * 12, alias="ACCESS_TOKEN_TTL_MINUTES", gt=0
     )
-    bootstrap_admin_token: Optional[str] = Field(
-        default=None, alias="BOOTSTRAP_ADMIN_TOKEN"
+    bootstrap_admin_email: Optional[str] = Field(
+        default=None, alias="BOOTSTRAP_ADMIN_EMAIL"
+    )
+    bootstrap_admin_password: Optional[str] = Field(
+        default=None, alias="BOOTSTRAP_ADMIN_PASSWORD"
     )
 
     # Registration is open by default so a fresh install can bootstrap itself.

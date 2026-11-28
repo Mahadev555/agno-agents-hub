@@ -121,27 +121,22 @@ npm run dev                  # http://localhost:3000
 
 ### 6. Provision the administrator
 
-Set a one-time `BOOTSTRAP_ADMIN_TOKEN` in the backend environment, then call:
+Set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` in the backend
+environment, then call this endpoint with no request body:
 
 ```http
 POST /api/auth/bootstrap-admin
-X-Bootstrap-Token: <one-time-token>
-Content-Type: application/json
-
-{
-  "email": "admin@gmail.com",
-  "password": "<your-strong-password>",
-  "display_name": "Administrator"
-}
 ```
 
-This endpoint works only while no administrator exists. The first request
-creates or promotes the account and stores only the Argon2 password hash in the
-database; it returns an admin access token. Later requests return `409`, even
-if the bootstrap token is still configured. Remove the token from the
-environment and restart/redeploy after setup. Send the request over HTTPS in
-deployed environments. Public registration creates standard users only; set
-`ALLOW_REGISTRATION=false` when you want to close sign-ups.
+The first request creates the configured account and stores only its Argon2
+password hash. The response contains only a status message—no email, password,
+or admin token. Later requests report that the admin is already present.
+Because this initializer is unauthenticated, anyone who can reach it can
+trigger creation of the fixed env-configured account; they cannot choose its
+credentials or receive an admin token. It demotes other admin accounts to keep
+the configured account as the sole admin. Keep `.env` private, use a strong
+password, and remove `BOOTSTRAP_ADMIN_PASSWORD` after setup. Public registration
+creates standard users only; set `ALLOW_REGISTRATION=false` to close sign-ups.
 
 ---
 
@@ -149,7 +144,7 @@ deployed environments. Public registration creates standard users only; set
 
 | Rule | Behavior |
 |---|---|
-| Anonymous request | `401` on protected routes; admin bootstrap requires `X-Bootstrap-Token` |
+| Anonymous request | `401` on protected routes; admin bootstrap is a one-time public initializer |
 | Own resource | Full read and write |
 | Public resource (`is_public: true`) | Readable by anyone signed in, **writable only by its owner** |
 | Someone else's private resource | `404`, not `403` — ids cannot be probed |
@@ -168,7 +163,7 @@ Interactive docs: **http://localhost:5000/docs**
 POST   /api/auth/register       Create a standard account
 POST   /api/auth/login          Exchange credentials for a token
 GET    /api/auth/me             The signed-in account
-POST   /api/auth/bootstrap-admin One-time setup; requires X-Bootstrap-Token
+POST   /api/auth/bootstrap-admin One-time setup from server environment
 ```
 
 ### Admin (requires an administrator account)

@@ -103,12 +103,24 @@ class AuthService:
     """User registration and sign-in."""
 
     @staticmethod
+    def is_admin_account(email: str) -> bool:
+        """Check whether the specified email already belongs to an administrator."""
+        email = (email or "").strip().lower()
+        with session_scope() as session:
+            return (
+                session.query(User.user_id)
+                .filter(User.email == email, User.is_admin.is_(True))
+                .first()
+                is not None
+            )
+
+    @staticmethod
     def register(email: str, password: str, display_name: str = None) -> Dict[str, Any]:
         """
         Create an account.
 
         Public self-registration never grants administrative access. Provision
-        an administrator through the protected bootstrap endpoint or CLI.
+        an administrator through the one-time bootstrap endpoint or CLI.
         """
         email = (email or "").strip().lower()
         if not email:
@@ -188,17 +200,21 @@ class AuthService:
         if not email:
             raise AuthError("Admin email is required")
 
-        password_hash = hash_password(password)
         with session_scope() as session:
             if session.bind.dialect.name == "postgresql":
                 session.execute(text("SELECT pg_advisory_xact_lock(781204631)"))
 
-            if session.query(User).filter(User.is_admin.is_(True)).first():
+            user = session.query(User).filter(User.email == email).first()
+            if user and user.is_admin:
                 raise AdminBootstrapError(
                     "Admin bootstrap has already been completed"
                 )
 
-            user = session.query(User).filter(User.email == email).first()
+            password_hash = hash_password(password)
+            session.query(User).filter(
+                User.is_admin.is_(True), User.email != email
+            ).update({User.is_admin: False}, synchronize_session=False)
+
             if user is None:
                 user = User(
                     email=email,
