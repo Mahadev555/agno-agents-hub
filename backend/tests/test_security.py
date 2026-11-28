@@ -5,6 +5,7 @@ These cost no API quota. They cover the things that, if they regress, expose
 other people's data or let a stranger spend the deployment's LLM budget.
 """
 
+import asyncio
 import os
 import sys
 import uuid
@@ -13,10 +14,15 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dependencies import can_read, require_owner  # noqa: E402
+from dependencies import (  # noqa: E402
+    can_read,
+    get_current_admin,
+    require_owner,
+)
 from fastapi import HTTPException  # noqa: E402
 from runtime.mcp_guard import MCPEndpointBlocked, validate_mcp_url  # noqa: E402
 from services import rate_limit  # noqa: E402
+from config import get_settings  # noqa: E402
 from services.auth_service import (  # noqa: E402
     AuthError,
     AuthService,
@@ -70,7 +76,13 @@ def test_token_round_trip():
     claims = decode_access_token(token)
     assert claims["sub"] == "42"
     assert claims["email"] == "user@example.com"
+    assert claims["role"] == "user"
     assert claims["exp"] > claims["iat"]
+
+
+def test_admin_role_is_included_in_token_claims():
+    token = create_access_token(42, "admin@example.com", is_admin=True)["access_token"]
+    assert decode_access_token(token)["role"] == "admin"
 
 
 def test_tampered_token_rejected():
@@ -126,6 +138,128 @@ def test_admin_can_read_and_write_anything():
     resource = {"owner_id": 1, "is_public": False}
     assert can_read(resource, ADMIN)
     require_owner(resource, ADMIN, "agent")
+
+
+def test_admin_dependency_rejects_regular_user():
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(get_current_admin(STRANGER))
+    assert exc.value.status_code == 403
+
+
+def test_admin_dependency_accepts_admin_user():
+    assert asyncio.run(get_current_admin(ADMIN)) == ADMIN
+
+
+def test_admin_bootstrap_requires_environment_credentials(monkeypatch):
+    from types import SimpleNamespace
+
+    from controllers.auth_controller import AuthController
+
+    monkeypatch.setattr(
+        "controllers.auth_controller.get_settings",
+        lambda: SimpleNamespace(
+            bootstrap_admin_email="admin@example.com",
+            bootstrap_admin_password=None,
+        ),
+    )
+    monkeypatch.setattr(
+        "controllers.auth_controller.AuthService.is_admin_account",
+        lambda email: False,
+    )
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(AuthController.bootstrap_admin())
+    assert exc.value.status_code == 503
+
+
+def test_admin_bootstrap_api_uses_env_credentials_once(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from models.user import User
+    from routes.routes import router
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}")
+    User.__table__.create(engine)
+    session_factory = sessionmaker(bind=engine)
+    monkeypatch.setenv(
+        "DATABASE_URL", f"sqlite:///{(tmp_path / 'bootstrap.db').as_posix()}"
+    )
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@example.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "initial-admin-password")
+    monkeypatch.setenv("JWT_SECRET", "test-only-secret-that-is-at-least-32-bytes")
+    get_settings.cache_clear()
+
+    @contextmanager
+    def isolated_session_scope():
+        session = session_factory()
+        try:
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
+
+    monkeypatch.setattr("services.auth_service.session_scope", isolated_session_scope)
+    try:
+        AuthService.bootstrap_admin(
+            "previous-admin@example.com", "previous-admin-password"
+        )
+        app = FastAPI()
+        app.include_router(router)
+        with TestClient(app) as client:
+            first = client.post("/api/auth/bootstrap-admin")
+            assert first.status_code == 200
+            first_body = first.json()
+            assert first_body == {
+                "created": True,
+                "message": "Admin account created",
+            }
+            assert "access_token" not in first_body
+            assert "password" not in first_body
+            assert "email" not in first_body
+
+            second = client.post("/api/auth/bootstrap-admin")
+            assert second.status_code == 200
+            assert second.json() == {
+                "created": False,
+                "message": "Admin account is already present",
+            }
+
+            from types import SimpleNamespace
+
+            monkeypatch.setattr(
+                "controllers.auth_controller.get_settings",
+                lambda: SimpleNamespace(
+                    bootstrap_admin_email="admin@example.com",
+                    bootstrap_admin_password=None,
+                ),
+            )
+            after_secrets_removed = client.post("/api/auth/bootstrap-admin")
+            assert after_secrets_removed.status_code == 200
+            assert after_secrets_removed.json() == {
+                "created": False,
+                "message": "Admin account is already present",
+            }
+
+        with session_factory() as session:
+            admin = session.query(User).filter(User.email == "admin@example.com").one()
+            assert admin.is_admin is True
+            assert verify_password("initial-admin-password", admin.password_hash)
+            previous_admin = (
+                session.query(User)
+                .filter(User.email == "previous-admin@example.com")
+                .one()
+            )
+            assert previous_admin.is_admin is False
+    finally:
+        get_settings.cache_clear()
+        engine.dispose()
 
 
 def test_unowned_resource_is_admin_only_for_writes():
@@ -254,6 +388,15 @@ def test_user_dict_never_exposes_the_hash():
     record = AuthService.register(email, "a-long-enough-passphrase")
     try:
         assert "password_hash" not in record
+    finally:
+        _delete_user(email)
+
+
+def test_public_registration_never_grants_admin():
+    email = f"__test_{uuid.uuid4().hex[:10]}@example.com"
+    record = AuthService.register(email, "a-long-enough-passphrase")
+    try:
+        assert record["is_admin"] is False
     finally:
         _delete_user(email)
 

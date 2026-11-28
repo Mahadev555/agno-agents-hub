@@ -119,9 +119,24 @@ npm install
 npm run dev                  # http://localhost:3000
 ```
 
-### 6. Create the first account
+### 6. Provision the administrator
 
-Every endpoint except `/health` and `/api/auth/*` requires a bearer token. Open the app and register — **the first account created becomes an administrator.**
+Set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` in the backend
+environment, then call this endpoint with no request body:
+
+```http
+POST /api/auth/bootstrap-admin
+```
+
+The first request creates the configured account and stores only its Argon2
+password hash. The response contains only a status message—no email, password,
+or admin token. Later requests report that the admin is already present.
+Because this initializer is unauthenticated, anyone who can reach it can
+trigger creation of the fixed env-configured account; they cannot choose its
+credentials or receive an admin token. It demotes other admin accounts to keep
+the configured account as the sole admin. Keep `.env` private, use a strong
+password, and remove `BOOTSTRAP_ADMIN_PASSWORD` after setup. Public registration
+creates standard users only; set `ALLOW_REGISTRATION=false` to close sign-ups.
 
 ---
 
@@ -129,7 +144,7 @@ Every endpoint except `/health` and `/api/auth/*` requires a bearer token. Open 
 
 | Rule | Behavior |
 |---|---|
-| Anonymous request | `401` on everything except `/health`, `/api/auth/register`, `/api/auth/login` |
+| Anonymous request | `401` on protected routes; admin bootstrap is a one-time public initializer |
 | Own resource | Full read and write |
 | Public resource (`is_public: true`) | Readable by anyone signed in, **writable only by its owner** |
 | Someone else's private resource | `404`, not `403` — ids cannot be probed |
@@ -145,10 +160,25 @@ Interactive docs: **http://localhost:5000/docs**
 
 ### Auth
 ```
-POST   /api/auth/register       Create an account (first one is admin)
+POST   /api/auth/register       Create a standard account
 POST   /api/auth/login          Exchange credentials for a token
 GET    /api/auth/me             The signed-in account
+POST   /api/auth/bootstrap-admin One-time setup from server environment
 ```
+
+### Admin (requires an administrator account)
+```
+GET    /api/admin/overview      Aggregate account, resource, run, and token counts
+GET    /api/admin/users         Paginated user list; optional ?search=
+GET    /api/admin/agents        Agent metadata and owners; optional ?search=
+GET    /api/admin/teams         Team composition and owners; optional ?search=
+GET    /api/admin/runs          Global run history; optional ?status= and ?user_id=
+GET    /api/admin/runs/{id}     Full prompt, output, error, and usage
+```
+
+Admin authorization is checked against the current database role on every
+request. The JWT role claim is informational; changing a claim cannot grant
+admin access. Admin resource lists omit raw agent and team configuration.
 
 ### Agents
 ```

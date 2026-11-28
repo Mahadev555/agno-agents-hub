@@ -1,15 +1,17 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from controllers.agent_execution_controller import AgentExecutionController
+from controllers.admin_controller import AdminController
 from controllers.auth_controller import (
     AuthController,
+    BootstrapAdminResponse,
     LoginRequest,
     RegisterRequest,
     TokenResponse,
@@ -27,7 +29,7 @@ from controllers.team_controller import (
     TeamsController,
     TeamUpdateRequest,
 )
-from dependencies import get_current_user, get_current_user_sse
+from dependencies import get_current_admin, get_current_user, get_current_user_sse
 from services.run_bus import run_bus
 
 logger = logging.getLogger(__name__)
@@ -533,13 +535,19 @@ async def run_team(team_id: int, request: TeamRunRequest, user=Depends(get_curre
 
 # ======================= AUTH ROUTES =======================
 #
-# The only endpoints reachable without a token. Everything else requires
-# Authorization: Bearer <access_token>.
+# Public auth endpoints require no user bearer token. The bootstrap endpoint
+# uses fixed credentials from backend settings and never returns a user token.
 
 @router.post("/api/auth/register", response_model=TokenResponse, status_code=201)
 async def register(payload: RegisterRequest):
-    """Create an account and return an access token. First account is admin."""
+    """Create a standard account and return an access token."""
     return await AuthController.register(payload)
+
+
+@router.post("/api/auth/bootstrap-admin", response_model=BootstrapAdminResponse)
+async def bootstrap_admin():
+    """Create the first administrator using server-side environment credentials."""
+    return await AuthController.bootstrap_admin()
 
 
 @router.post("/api/auth/login", response_model=TokenResponse)
@@ -552,3 +560,65 @@ async def login(payload: LoginRequest):
 async def me(user=Depends(get_current_user)):
     """Return the signed-in account."""
     return await AuthController.me(user)
+
+
+# ======================= ADMIN DASHBOARD ROUTES =======================
+# Each endpoint independently checks the user's current database role.
+
+@router.get("/api/admin/overview")
+async def admin_overview(_admin=Depends(get_current_admin)):
+    """Return aggregate user, resource, run, and token-usage counts."""
+    return AdminController.overview()
+
+
+@router.get("/api/admin/users")
+async def admin_users(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None, max_length=120),
+    _admin=Depends(get_current_admin),
+):
+    """List users without exposing password hashes."""
+    return AdminController.users(limit=limit, offset=offset, search=search)
+
+
+@router.get("/api/admin/agents")
+async def admin_agents(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None, max_length=120),
+    _admin=Depends(get_current_admin),
+):
+    """List agent metadata and owners, excluding configuration secrets."""
+    return AdminController.agents(limit=limit, offset=offset, search=search)
+
+
+@router.get("/api/admin/teams")
+async def admin_teams(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    search: Optional[str] = Query(None, max_length=120),
+    _admin=Depends(get_current_admin),
+):
+    """List team composition and owners, excluding raw configuration."""
+    return AdminController.teams(limit=limit, offset=offset, search=search)
+
+
+@router.get("/api/admin/runs")
+async def admin_runs(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    status: Optional[Literal["pending", "running", "completed", "error"]] = Query(None),
+    user_id: Optional[int] = Query(None, ge=1),
+    _admin=Depends(get_current_admin),
+):
+    """List global run metadata with status and owner filters."""
+    return AdminController.runs(
+        limit=limit, offset=offset, status=status, user_id=user_id
+    )
+
+
+@router.get("/api/admin/runs/{run_id}")
+async def admin_run(run_id: str, _admin=Depends(get_current_admin)):
+    """Fetch full prompt, output, error, and usage data for one run."""
+    return AdminController.run(run_id)

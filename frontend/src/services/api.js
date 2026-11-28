@@ -334,6 +334,47 @@ export const teamService = {
   },
 }
 
+export const adminService = {
+  getOverview: async () => {
+    const response = await api.get('/api/admin/overview')
+    return response.data
+  },
+
+  listUsers: async ({ limit = 50, offset = 0, search = '' } = {}) => {
+    const params = { limit, offset }
+    if (search.trim()) params.search = search.trim()
+    const response = await api.get('/api/admin/users', { params })
+    return response.data
+  },
+
+  listAgents: async ({ limit = 50, offset = 0, search = '' } = {}) => {
+    const params = { limit, offset }
+    if (search.trim()) params.search = search.trim()
+    const response = await api.get('/api/admin/agents', { params })
+    return response.data
+  },
+
+  listTeams: async ({ limit = 50, offset = 0, search = '' } = {}) => {
+    const params = { limit, offset }
+    if (search.trim()) params.search = search.trim()
+    const response = await api.get('/api/admin/teams', { params })
+    return response.data
+  },
+
+  listRuns: async ({ limit = 50, offset = 0, status = '', userId = null } = {}) => {
+    const params = { limit, offset }
+    if (status) params.status = status
+    if (userId) params.user_id = Number(userId)
+    const response = await api.get('/api/admin/runs', { params })
+    return response.data
+  },
+
+  getRun: async (runId) => {
+    const response = await api.get(`/api/admin/runs/${runId}`)
+    return response.data
+  },
+}
+
 export const authService = {
   register: async (email, password, displayName) => {
     const response = await api.post('/api/auth/register', {

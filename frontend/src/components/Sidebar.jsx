@@ -6,6 +6,7 @@ import {
   LogOut,
   MessageSquare,
   History,
+  Shield,
   Users,
   Settings as SettingsIcon,
   UserCircle,
@@ -18,6 +19,7 @@ const icons = {
   agents: Bot,
   teams: Users,
   runs: History,
+  admin: Shield,
 }
 
 const Sidebar = ({

@@ -32,6 +32,7 @@ backend/
 │
 ├── services/
 │   ├── auth_service.py     Argon2 hashing, JWT issue/verify
+│   ├── admin_service.py   Admin aggregates and paginated views
 │   ├── agent_service.py    Agent + Team writes (validated)
 │   ├── database_service.py Reads
 │   ├── run_service.py      Run persistence
@@ -39,6 +40,7 @@ backend/
 │   └── rate_limit.py       Per-user run quotas
 │
 ├── controllers/            Authorization + orchestration
+├── bootstrap_admin.py      Local admin provisioning fallback
 ├── routes/routes.py        Endpoints
 ├── agents/
 │   ├── hosts/host_agent.py Config -> Agno Agent/Team
@@ -63,7 +65,18 @@ python -m alembic upgrade head        # create the schema
 python run_server.py                  # http://localhost:5000
 ```
 
-Register the first account through the API or the UI — **it becomes an administrator**.
+Set `BOOTSTRAP_ADMIN_EMAIL` and `BOOTSTRAP_ADMIN_PASSWORD` in the backend
+environment (or `.env` locally), then call `POST /api/auth/bootstrap-admin`
+with no request body. It creates the configured account once, stores only an
+Argon2 password hash, and returns a generic status message—not the email,
+password, or an access token. Calls after an admin exists return
+`{"created": false, "message": "Admin account is already present"}`. This
+endpoint is intentionally unauthenticated so the initial setup can be
+triggered; anyone who can reach it can trigger account creation, but cannot
+choose credentials or receive an admin token. If another admin exists, the
+configured account becomes the sole admin. Keep the environment file private,
+use a strong password, and remove the bootstrap password after provisioning.
+Public registration creates standard accounts only.
 
 ### Optional: sample agents
 
@@ -157,14 +170,31 @@ Names are validated when an agent is **saved**. An unknown tool or provider is a
 
 ## API
 
-Interactive docs at `/docs`. All endpoints require `Authorization: Bearer <token>` except `/health` and `/api/auth/{register,login}`.
+Interactive docs at `/docs`. Endpoints require `Authorization: Bearer <token>`
+except `/health`, `/api/auth/{register,login}`, and the one-time
+`/api/auth/bootstrap-admin` initializer.
 
 ### Auth
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/auth/register` | First account becomes admin |
+| POST | `/api/auth/register` | Creates a standard account |
 | POST | `/api/auth/login` | Returns token + user |
 | GET | `/api/auth/me` | Current account |
+| POST | `/api/auth/bootstrap-admin` | One-time setup using server-side bootstrap credentials; no body |
+
+### Admin
+Every endpoint below requires the current account to have `is_admin=true`.
+The role is re-read from the database for each request; JWT role claims are
+never trusted for authorization.
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/api/admin/overview` | Aggregate user, agent, team, run, and token counts |
+| GET | `/api/admin/users` | Paginated users, optional `search`; no password hashes |
+| GET | `/api/admin/agents` | Paginated metadata and owners; excludes raw configs |
+| GET | `/api/admin/teams` | Paginated composition and owners; excludes raw configs |
+| GET | `/api/admin/runs` | Global paginated history; optional `status` and `user_id` |
+| GET | `/api/admin/runs/{id}` | Full prompt, output, error, and token usage |
 
 ### Agents
 | Method | Path |
@@ -232,7 +262,7 @@ A terminal event (`completed` or `error`) is **always** last, so a consumer neve
 
 **Passwords** — Argon2id. Not bcrypt, which silently truncates at 72 bytes and would make two long passphrases interchangeable.
 
-**Tokens** — JWT with a pinned algorithm, so a token cannot request `alg: none`. The user is re-read from the database each request, so a disabled account stops working immediately.
+**Tokens** — JWT with a pinned algorithm, so a token cannot request `alg: none`. The user and admin role are re-read from the database each request, so disabling or demoting an account takes effect immediately. The role claim is informational only.
 
 **MCP egress** — an agent's `mcp_config.url` is user-supplied and the server connects to it, which is SSRF by design. `runtime/mcp_guard.py` resolves the host and refuses loopback, private, link-local, reserved, and multicast addresses — including `169.254.169.254`, where cloud instance metadata lives. Every resolved address is checked, since a hostname can resolve to both a public and a private address.
 
